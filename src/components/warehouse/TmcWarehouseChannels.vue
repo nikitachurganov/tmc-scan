@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined } from '@ant-design/icons-vue'
+import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { ref, watch } from 'vue'
 import { useWarehouse } from '@/composables/useWarehouse'
@@ -98,9 +98,7 @@ function save() {
           :status="error && !URL_PATTERN.test(channel.url.trim()) ? 'error' : undefined"
           class="wc__url"
           @change="error = ''"
-        >
-          <template #prefix><LinkOutlined class="wc__icon" /></template>
-        </a-input>
+        />
         <a-button type="text" danger aria-label="Удалить канал" @click="removeChannel(channel)">
           <template #icon><DeleteOutlined /></template>
         </a-button>
@@ -110,9 +108,10 @@ function save() {
 
     <ul v-else-if="warehouse.channels.length" class="wc__list">
       <li v-for="channel in warehouse.channels" :key="channel.id" class="wc__item">
-        <LinkOutlined class="wc__icon" />
         <span class="wc__item-name">{{ channel.title }}</span>
-        <a :href="channel.url" target="_blank" rel="noopener noreferrer" class="wc__item-url">{{ channel.url }}</a>
+        <a-typography-link :href="channel.url" target="_blank" rel="noopener noreferrer" class="wc__item-url">
+          {{ channel.url }}
+        </a-typography-link>
       </li>
     </ul>
     <a-empty v-else description="Каналов пока нет" />
@@ -175,10 +174,6 @@ function save() {
   min-width: 0;
 }
 
-.wc__icon {
-  color: var(--tmc-icon);
-}
-
 .wc__error {
   margin-top: 8px;
   color: #ff4d4f;
@@ -198,13 +193,15 @@ function save() {
   align-items: center;
   gap: 8px;
   padding: 12px;
+  /* название и ссылка одного размера — базовый текст Ant (14/22) */
+  font-size: 14px;
+  line-height: 22px;
   background: var(--tmc-bg-layout);
   border-radius: 8px;
 }
 
 .wc__item-name {
   flex: none;
-  font-weight: 700;
   color: var(--tmc-text);
 }
 
