@@ -1,12 +1,6 @@
 <script setup lang="ts">
-import {
-  CalendarOutlined,
-  EnvironmentOutlined,
-  ExclamationCircleOutlined,
-  MessageOutlined,
-} from '@ant-design/icons-vue'
+import { ExclamationCircleOutlined } from '@ant-design/icons-vue'
 import { computed } from 'vue'
-import TmcStatusTag from '@/components/warehouse/TmcStatusTag.vue'
 import { parseRuDate } from '@/utils/date'
 import { formatDuration } from '@/utils/duration'
 import { requestDates } from '@/utils/requestDates'
@@ -38,13 +32,6 @@ const plannedDuration = computed(() => {
 const done = computed(() => props.scanned + props.problems)
 const percent = computed(() => (props.total ? Math.round((done.value / props.total) * 100) : 0))
 
-const initials = computed(() =>
-  props.request.fullName
-    .split(' ')
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join(''),
-)
 </script>
 
 <template>
@@ -54,12 +41,12 @@ const initials = computed(() =>
         <div class="is__eyebrow">{{ mode === 'issue' ? 'Выдача по заявке' : 'Возврат по заявке' }}</div>
         <h2 class="is__number">{{ request.number }}</h2>
       </div>
-      <TmcStatusTag :label="request.status" />
+
     </header>
 
     <section class="is__progress" aria-live="polite">
       <div class="is__progress-row">
-        <span class="is__progress-label">Сверено</span>
+        <span class="is__progress-label">Отсканировано ТМЦ</span>
         <span class="is__progress-value">{{ scanned }} из {{ total }}</span>
       </div>
       <a-progress
@@ -76,17 +63,12 @@ const initials = computed(() =>
 
     <section class="is__section">
       <h3 class="is__title">Пользователь</h3>
-      <div class="is__user">
-        <a-avatar :size="40" class="is__avatar">{{ initials }}</a-avatar>
-        <div class="is__user-text">
-          <div class="is__user-name">{{ request.fullName }}</div>
-          <a :href="`mailto:${request.email}`" class="is__user-email">{{ request.email }}</a>
-        </div>
-      </div>
+      <div class="is__user-name">{{ request.fullName }}</div>
+      <div class="is__user-email">{{ request.email }}</div>
     </section>
 
     <section class="is__section">
-      <h3 class="is__title"><CalendarOutlined /> Сроки</h3>
+      <h3 class="is__title">Сроки</h3>
       <div class="is__dates">
         <span />
         <span class="is__dates-head">План</span>
@@ -104,17 +86,17 @@ const initials = computed(() =>
     </section>
 
     <section class="is__section">
-      <h3 class="is__title"><EnvironmentOutlined /> Место выдачи</h3>
+      <h3 class="is__title">Место выдачи</h3>
       <p class="is__text">{{ request.place }}</p>
     </section>
 
     <section v-if="request.userComment" class="is__section">
-      <h3 class="is__title"><MessageOutlined /> Комментарий пользователя</h3>
-      <blockquote class="is__quote">{{ request.userComment }}</blockquote>
+      <h3 class="is__title">Комментарий пользователя</h3>
+      <p class="is__text is__comment">{{ request.userComment }}</p>
     </section>
 
     <section v-if="request.itemComments.length" class="is__section">
-      <h3 class="is__title"><ExclamationCircleOutlined /> Заметки склада к ТМЦ</h3>
+      <h3 class="is__title">Заметки склада к ТМЦ</h3>
       <ul class="is__notes">
         <li v-for="note in request.itemComments" :key="note.id" class="is__note">
           <p class="is__note-text">{{ note.text }}</p>
@@ -210,21 +192,6 @@ const initials = computed(() =>
   color: var(--tmc-text-secondary);
 }
 
-.is__user {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.is__avatar {
-  flex: none;
-  color: var(--tmc-primary);
-  background: #e6f1fb;
-}
-
-.is__user-text {
-  min-width: 0;
-}
 
 .is__user-name {
   font-size: 15px;
@@ -235,6 +202,8 @@ const initials = computed(() =>
 
 .is__user-email {
   font-size: 13px;
+  line-height: 18px;
+  color: var(--tmc-text-tertiary);
   word-break: break-all;
 }
 
@@ -274,15 +243,7 @@ const initials = computed(() =>
   color: var(--tmc-text);
 }
 
-.is__quote {
-  margin: 0;
-  padding: 8px 12px;
-  font-size: 14px;
-  line-height: 20px;
-  color: var(--tmc-text);
-  background: var(--tmc-bg-layout);
-  border-left: 3px solid var(--tmc-primary);
-  border-radius: 0 8px 8px 0;
+.is__comment {
   white-space: pre-wrap;
 }
 

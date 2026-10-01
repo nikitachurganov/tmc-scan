@@ -231,7 +231,7 @@ export const equipmentOriginLabels: Record<EquipmentOrigin, string> = {
   adhoc: 'Не в реестре ОС',
 }
 
-export const warehousePlace = 'Общежитие №7 · комната выдачи 101'
+export const warehousePlace = 'Общежитие №7 · 101'
 
 /** Время, до которого нужно вернуть ТМЦ в день срока возврата */
 export const RETURN_DEADLINE_TIME = '18:00'

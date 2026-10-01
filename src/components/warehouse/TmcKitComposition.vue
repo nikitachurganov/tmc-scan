@@ -37,10 +37,11 @@ const pickerGroupId = ref<number | null>(null)
 const pickerGroup = computed(() => groups.value.find((g) => g.id === pickerGroupId.value) ?? null)
 
 // в режиме экземпляров ровно одна группа существует всегда, имя — по первому экземпляру
+// и в режиме комплекта форма стартует с одной пустой группой; удалили последнюю — появляется новая пустая
 watch(
-  () => props.copiesMode,
-  (pool) => {
-    if (pool && groups.value.length === 0) groups.value = [{ id: 1, name: '', unitIds: [] }]
+  () => [props.copiesMode, groups.value.length] as const,
+  () => {
+    if (groups.value.length === 0) groups.value = [{ id: 1, name: '', unitIds: [] }]
   },
   { immediate: true },
 )
@@ -90,24 +91,22 @@ const copiesFreeUnits = computed(() => {
 
 <template>
   <div class="kc">
-    <div v-if="!groups.length" class="kc__empty">
-      Группы не добавлены. Нажмите «Добавить группу», чтобы собрать комплект.
+    <!-- комплект: «Добавить группу» сверху, под выбором типа -->
+    <div v-if="!copiesMode" class="kc__foot">
+      <a-button type="primary" :block="isMobile" @click="addGroup">
+        <template #icon><PlusOutlined /></template>
+        Добавить группу
+      </a-button>
     </div>
 
     <article v-for="group in groups" :key="group.id" class="kc__group">
-      <!-- экземпляры: кнопка добавления над списком, итог под ним -->
-      <a-button v-if="copiesMode" type="dashed" block class="kc__add-unit" @click="openPicker(group)">
-        <template #icon><PlusOutlined /></template>
-        Добавить экземпляры
-      </a-button>
-
+      <!-- комплект: название группы и удаление, сразу под ними — добавление оборудования -->
       <div v-if="!copiesMode" class="kc__group-head">
         <a-input
           v-model:value="group.name"
           placeholder="Название группы, например «HDMI-кабель»"
           class="kc__name"
         />
-        <span class="kc__count">{{ group.unitIds.length }} шт.</span>
         <a-button
           type="text"
           danger
@@ -118,6 +117,11 @@ const copiesFreeUnits = computed(() => {
           <template #icon><DeleteOutlined /></template>
         </a-button>
       </div>
+
+      <a-button type="dashed" block class="kc__add-unit" @click="openPicker(group)">
+        <template #icon><PlusOutlined /></template>
+        {{ copiesMode ? 'Добавить экземпляры' : 'Добавить оборудование' }}
+      </a-button>
 
       <ul v-if="group.unitIds.length" class="kc__units">
         <li v-for="unit in unitsOf(group)" :key="unit.id" class="kc__unit">
@@ -134,25 +138,9 @@ const copiesFreeUnits = computed(() => {
           </a-button>
         </li>
       </ul>
-      <div v-else-if="!copiesMode" class="kc__units-empty">
-        В группе пока нет оборудования
-      </div>
 
       <div v-if="copiesMode" class="kc__total">Количество: {{ group.unitIds.length }} шт.</div>
-
-      <a-button v-else class="kc__add-unit" @click="openPicker(group)">
-        <template #icon><PlusOutlined /></template>
-        Добавить оборудование
-      </a-button>
     </article>
-
-    <!-- итог «N шт.» уже в шапке группы, отдельная строка итога и подсказка не нужны -->
-    <div v-if="!copiesMode" class="kc__foot">
-      <a-button type="primary" :block="isMobile" @click="addGroup">
-        <template #icon><PlusOutlined /></template>
-        Добавить группу
-      </a-button>
-    </div>
     <div v-if="error" class="kc__error" role="alert">{{ error }}</div>
 
     <TmcEquipmentPicker
@@ -175,14 +163,6 @@ const copiesFreeUnits = computed(() => {
   gap: 12px;
 }
 
-.kc__empty {
-  padding: 16px;
-  text-align: center;
-  color: var(--tmc-text-tertiary);
-  background: #fafafa;
-  border-radius: 8px;
-}
-
 .kc__group {
   display: flex;
   flex-direction: column;
@@ -201,12 +181,6 @@ const copiesFreeUnits = computed(() => {
 .kc__name {
   flex: 1;
   min-width: 0;
-}
-
-.kc__count {
-  flex: none;
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 .kc__remove {
@@ -253,13 +227,6 @@ const copiesFreeUnits = computed(() => {
 .kc__unit-remove {
   flex: none;
   color: var(--tmc-icon);
-}
-
-.kc__units-empty {
-  padding: 8px 12px;
-  color: var(--tmc-text-tertiary);
-  background: #fafafa;
-  border-radius: 6px;
 }
 
 .kc__add-unit {

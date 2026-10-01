@@ -58,17 +58,11 @@ async function submit() {
 <template>
   <a-modal
     :open="open"
-    title="Оборудование не из реестра ОС"
+    title="Ручное добавление"
     :width="440"
     destroy-on-close
     @cancel="emit('close')"
   >
-    <a-alert
-      type="info"
-      show-icon
-      class="aae-alert"
-      message="Не ставится на учёт как основное средство — хранится только в реестре ТМЦ, чтобы его можно было выдавать. Например, утюг или чайник. Код для выдачи система присвоит сама."
-    />
     <a-form ref="formRef" :model="form" :rules="rules" layout="vertical" @finish="submit">
       <a-form-item label="Наименование" name="name">
         <a-input v-model:value="form.name" size="large" placeholder="Например, Утюг" autofocus />
@@ -93,9 +87,3 @@ async function submit() {
     </template>
   </a-modal>
 </template>
-
-<style scoped>
-.aae-alert {
-  margin-bottom: 16px;
-}
-</style>

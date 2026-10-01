@@ -215,10 +215,7 @@ function confirmPartial() {
       <div class="td-grid">
         <section class="td-card">
           <header class="td-card__head">
-            <h2 class="td-card__title">
-              Список ТМЦ
-              <span class="td-card__count">{{ scannedCount }} из {{ request.items.length }}</span>
-            </h2>
+            <h2 class="td-card__title">Список ТМЦ</h2>
           </header>
 
           <div class="td-toolbar">
@@ -238,14 +235,16 @@ function confirmPartial() {
               <template #prefix><BarcodeOutlined class="td-toolbar__icon" /></template>
             </a-input>
             <a-button size="large" @click="confirmByCode">Подтвердить</a-button>
-            <a-button
-              size="large"
-              :disabled="!pendingItems.length"
-              @click="scannerItemId = pendingItems[0]?.id ?? null"
-            >
-              <template #icon><ScanOutlined /></template>
-              Сканировать камерой
-            </a-button>
+            <a-tooltip title="Сканировать камерой">
+              <a-button
+                size="large"
+                aria-label="Сканировать камерой"
+                :disabled="!pendingItems.length"
+                @click="scannerItemId = pendingItems[0]?.id ?? null"
+              >
+                <template #icon><ScanOutlined /></template>
+              </a-button>
+            </a-tooltip>
           </div>
 
           <a-table :columns="desktopColumns" :data-source="request.items" :pagination="false" row-key="id">
@@ -283,10 +282,12 @@ function confirmPartial() {
 
           <footer class="td-footer">
             <a-button size="large" @click="close">Отмена</a-button>
-            <a-button size="large" @click="openProblem(null)">Проблема с ТМЦ</a-button>
-            <a-button size="large" type="primary" :disabled="!canSubmit" @click="submit">
-              {{ isReturn ? 'Принять возврат' : 'Выдать' }}
-            </a-button>
+            <div class="td-footer__main">
+              <a-button size="large" @click="openProblem(null)">Проблема с ТМЦ</a-button>
+              <a-button size="large" type="primary" :disabled="!canSubmit" @click="submit">
+                {{ isReturn ? 'Принять возврат' : 'Выдать' }}
+              </a-button>
+            </div>
           </footer>
         </section>
 
@@ -468,12 +469,6 @@ function confirmPartial() {
   color: var(--tmc-text);
 }
 
-.td-card__count {
-  margin-left: 6px;
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--tmc-text-tertiary);
-}
 
 .td-toolbar {
   display: flex;
@@ -518,11 +513,17 @@ function confirmPartial() {
 
 .td-footer {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--tmc-border-secondary);
+}
+
+.td-footer__main {
+  display: flex;
+  gap: 8px;
 }
 
 .tmc-screen {
