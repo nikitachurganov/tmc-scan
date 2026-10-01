@@ -1,0 +1,319 @@
+<script setup lang="ts">
+import { CloseOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons-vue'
+import { computed, ref, watch } from 'vue'
+import TmcEquipmentPicker from './TmcEquipmentPicker.vue'
+import { useIsMobile } from '@/composables/useIsMobile'
+import { useWarehouse } from '@/composables/useWarehouse'
+import type { EquipmentUnit, TmcGroup } from '@/mocks/tmc'
+
+const props = defineProps<{
+  /** Единицы оборудования, доступные для добавления в этот комплект */
+  availableUnits: EquipmentUnit[]
+  categories: string[]
+  /** Сообщение об ошибке состава, показывается под списком групп */
+  error?: string
+  /**
+   * Одна единица в нескольких экземплярах: ровно одна группа без возможности удалить/добавить
+   * группу — только набор взаимозаменяемых единиц одной категории.
+   */
+  copiesMode?: boolean
+  /** Категория ТМЦ: в режиме экземпляров подбираются только единицы этой категории */
+  copiesCategory?: string
+}>()
+
+// группы — объекты из реактивного состояния модала, поля правятся на месте
+const groups = defineModel<TmcGroup[]>('groups', { required: true })
+
+const { unitById } = useWarehouse()
+const isMobile = useIsMobile()
+
+/** Единицы, не занятые в группах этого комплекта, — их можно добавить */
+const freeUnits = computed(() => {
+  const taken = new Set(groups.value.flatMap((g) => g.unitIds))
+  return props.availableUnits.filter((u) => !taken.has(u.id))
+})
+
+const pickerGroupId = ref<number | null>(null)
+const pickerGroup = computed(() => groups.value.find((g) => g.id === pickerGroupId.value) ?? null)
+
+// в режиме экземпляров ровно одна группа существует всегда, имя — по первому экземпляру
+watch(
+  () => props.copiesMode,
+  (pool) => {
+    if (pool && groups.value.length === 0) groups.value = [{ id: 1, name: '', unitIds: [] }]
+  },
+  { immediate: true },
+)
+
+function unitsOf(group: TmcGroup): EquipmentUnit[] {
+  return group.unitIds.map(unitById).filter((u): u is EquipmentUnit => u !== undefined)
+}
+
+function addGroup() {
+  const id = groups.value.reduce((max, g) => Math.max(max, g.id), 0) + 1
+  groups.value = [...groups.value, { id, name: '', unitIds: [] }]
+}
+
+function removeGroup(group: TmcGroup) {
+  groups.value = groups.value.filter((g) => g.id !== group.id)
+}
+
+function addUnit(unitId: number) {
+  const group = pickerGroup.value
+  if (!group || group.unitIds.includes(unitId)) return
+  group.unitIds.push(unitId)
+  // пустое имя группы подставляется по первой добавленной единице
+  if (!group.name.trim()) group.name = unitById(unitId)?.name ?? ''
+}
+
+function removeUnit(group: TmcGroup, unitId: number) {
+  group.unitIds = group.unitIds.filter((id) => id !== unitId)
+}
+
+function openPicker(group: TmcGroup) {
+  pickerGroupId.value = group.id
+}
+
+/** Категория экземпляров: категория ТМЦ, а если она ещё не выбрана — категория первого экземпляра */
+const copiesCategory = computed(() => {
+  if (props.copiesCategory) return props.copiesCategory
+  const firstId = groups.value[0]?.unitIds[0]
+  return firstId !== undefined ? unitById(firstId)?.category : undefined
+})
+
+/** В режиме экземпляров добавлять можно только оборудование той же категории */
+const copiesFreeUnits = computed(() => {
+  if (!props.copiesMode || !copiesCategory.value) return freeUnits.value
+  return freeUnits.value.filter((u) => u.category === copiesCategory.value)
+})
+</script>
+
+<template>
+  <div class="kc">
+    <div v-if="!groups.length" class="kc__empty">
+      Группы не добавлены. Нажмите «Добавить группу», чтобы собрать комплект.
+    </div>
+
+    <article v-for="group in groups" :key="group.id" class="kc__group">
+      <!-- экземпляры: кнопка добавления над списком, итог под ним -->
+      <a-button v-if="copiesMode" type="dashed" block class="kc__add-unit" @click="openPicker(group)">
+        <template #icon><PlusOutlined /></template>
+        Добавить экземпляры
+      </a-button>
+
+      <div v-if="!copiesMode" class="kc__group-head">
+        <a-input
+          v-model:value="group.name"
+          placeholder="Название группы, например «HDMI-кабель»"
+          class="kc__name"
+        />
+        <span class="kc__count">{{ group.unitIds.length }} шт.</span>
+        <a-button
+          type="text"
+          danger
+          aria-label="Удалить группу"
+          class="kc__remove"
+          @click="removeGroup(group)"
+        >
+          <template #icon><DeleteOutlined /></template>
+        </a-button>
+      </div>
+
+      <ul v-if="group.unitIds.length" class="kc__units">
+        <li v-for="unit in unitsOf(group)" :key="unit.id" class="kc__unit">
+          <span class="kc__unit-name">{{ unit.name }}</span>
+          <span class="kc__unit-code">{{ unit.code }}</span>
+          <a-button
+            type="text"
+            size="small"
+            aria-label="Убрать оборудование"
+            class="kc__unit-remove"
+            @click="removeUnit(group, unit.id)"
+          >
+            <template #icon><CloseOutlined /></template>
+          </a-button>
+        </li>
+      </ul>
+      <div v-else-if="!copiesMode" class="kc__units-empty">
+        В группе пока нет оборудования
+      </div>
+
+      <div v-if="copiesMode" class="kc__total">Количество: {{ group.unitIds.length }} шт.</div>
+
+      <a-button v-else class="kc__add-unit" @click="openPicker(group)">
+        <template #icon><PlusOutlined /></template>
+        Добавить оборудование
+      </a-button>
+    </article>
+
+    <!-- итог «N шт.» уже в шапке группы, отдельная строка итога и подсказка не нужны -->
+    <div v-if="!copiesMode" class="kc__foot">
+      <a-button type="primary" :block="isMobile" @click="addGroup">
+        <template #icon><PlusOutlined /></template>
+        Добавить группу
+      </a-button>
+    </div>
+    <div v-if="error" class="kc__error" role="alert">{{ error }}</div>
+
+    <TmcEquipmentPicker
+      :open="pickerGroup !== null"
+      :group-name="pickerGroup?.name ?? ''"
+      :units="copiesMode ? copiesFreeUnits : freeUnits"
+      :selected-ids="pickerGroup?.unitIds ?? []"
+      :categories="categories"
+      :default-category="copiesMode ? copiesCategory : undefined"
+      @add="addUnit"
+      @close="pickerGroupId = null"
+    />
+  </div>
+</template>
+
+<style scoped>
+.kc {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kc__empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--tmc-text-tertiary);
+  background: #fafafa;
+  border-radius: 8px;
+}
+
+.kc__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+}
+
+.kc__group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kc__name {
+  flex: 1;
+  min-width: 0;
+}
+
+.kc__count {
+  flex: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.kc__remove {
+  flex: none;
+}
+
+.kc__units {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kc__unit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 4px 4px 12px;
+  /* фон страницы (bg layout); модал вне каркаса склада, поэтому с запасным значением */
+  background: var(--tmc-bg-layout, #f5f5f5);
+  border-radius: 6px;
+}
+
+.kc__unit-name {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+  font-weight: 600;
+  color: var(--tmc-text);
+}
+
+
+.kc__unit-code {
+  flex: 1;
+  min-width: 0;
+  color: var(--tmc-text-tertiary);
+  word-break: break-all;
+}
+
+.kc__unit-remove {
+  flex: none;
+  color: var(--tmc-icon);
+}
+
+.kc__units-empty {
+  padding: 8px 12px;
+  color: var(--tmc-text-tertiary);
+  background: #fafafa;
+  border-radius: 6px;
+}
+
+.kc__add-unit {
+  align-self: flex-start;
+}
+
+.kc__add-unit.ant-btn-block {
+  align-self: stretch;
+}
+
+/* primary dashed: в ant-design-vue 4.2 нет color="primary" у dashed — красим токеном проекта;
+   модал вне каркаса склада, поэтому с запасным значением */
+.kc__add-unit.ant-btn-dashed,
+.kc__add-unit.ant-btn-dashed:hover,
+.kc__add-unit.ant-btn-dashed:focus-visible {
+  color: var(--tmc-primary, #2d82cf);
+  border-color: var(--tmc-primary, #2d82cf);
+}
+
+.kc__add-unit.ant-btn-dashed:hover,
+.kc__add-unit.ant-btn-dashed:focus-visible {
+  background: #e6f1fb;
+}
+
+.kc__total {
+  color: var(--tmc-text-tertiary, rgba(0, 0, 0, 0.45));
+}
+
+.kc__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+
+
+
+.kc__error {
+  color: #ff4d4f;
+}
+
+@media (max-width: 767px) {
+  .kc__unit {
+    flex-wrap: wrap;
+    gap: 0 8px;
+  }
+
+  .kc__unit-name {
+    min-width: 0;
+  }
+
+  .kc__add-unit {
+    align-self: stretch;
+  }
+}
+</style>
