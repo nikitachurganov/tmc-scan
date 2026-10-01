@@ -144,7 +144,7 @@ async function submit() {
 
     <template #footer>
       <a-button size="large" @click="emit('close')">Отмена</a-button>
-      <a-button type="primary" size="large" danger @click="submit">Отметить проблему</a-button>
+      <a-button type="primary" size="large" @click="submit">Отметить проблему</a-button>
     </template>
   </a-modal>
 </template>

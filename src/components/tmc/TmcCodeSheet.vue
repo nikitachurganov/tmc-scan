@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ExclamationCircleOutlined } from '@ant-design/icons-vue'
 import { computed, ref, watch } from 'vue'
+import { useIsMobile } from '@/composables/useIsMobile'
 import type { TmcItem } from '@/mocks/tmc'
 
 const props = defineProps<{ open: boolean; item: TmcItem | null }>()
 const emit = defineEmits<{ close: []; confirm: [id: number] }>()
 
+const isMobile = useIsMobile()
 const code = ref('')
 
 // Держим последнюю позицию, чтобы заголовок не пропадал во время анимации закрытия
@@ -38,7 +40,39 @@ function confirm() {
 </script>
 
 <template>
+  <!-- ПК: обычный модал по центру; телефон: нижняя шторка -->
+  <a-modal
+    v-if="!isMobile"
+    :open="open"
+    :title="shownItem?.name"
+    :width="420"
+    centered
+    destroy-on-close
+    @cancel="emit('close')"
+  >
+    <p class="sheet__text sheet__text--modal">Введите инвентарный код ТМЦ для подтверждения наличия</p>
+    <a-input
+      v-model:value="code"
+      placeholder="Инвентарный код"
+      :status="state === 'invalid' ? 'error' : ''"
+      @press-enter="confirm"
+    >
+      <template #suffix>
+        <span v-if="state === 'valid'" class="sheet__ok">Верно</span>
+        <ExclamationCircleOutlined v-else-if="state === 'invalid'" class="sheet__err-icon" />
+        <span v-else />
+      </template>
+    </a-input>
+    <div v-if="state === 'invalid'" class="sheet__err">Введен неверный код</div>
+
+    <template #footer>
+      <a-button @click="emit('close')">Закрыть</a-button>
+      <a-button type="primary" :disabled="state !== 'valid'" @click="confirm">Подтвердить</a-button>
+    </template>
+  </a-modal>
+
   <a-drawer
+    v-else
     :open="open"
     placement="bottom"
     height="auto"
@@ -127,6 +161,10 @@ function confirm() {
   font-size: 13px;
   line-height: 20px;
   color: rgba(0, 0, 0, 0.45);
+}
+
+.sheet__text--modal {
+  margin: 0 0 12px;
 }
 
 .sheet__ok {

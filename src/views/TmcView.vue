@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import {
-  BarcodeOutlined,
   CheckCircleFilled,
   CloseOutlined,
   ExclamationCircleFilled,
@@ -150,7 +149,15 @@ const partialOpen = ref(false)
 const partialReason = ref('')
 const partialReasonError = ref(false)
 const notIssuedItems = computed(() => request.items.filter((i) => i.problem || !i.scanned))
+const issuedItems = computed(() => request.items.filter((i) => i.scanned && !i.problem))
 
+/** «Из 3 позиций будет выдано только 1: «Ноутбук»» */
+const partialSummary = computed(() => {
+  const total = request.items.length
+  const noun = total % 10 === 1 && total % 100 !== 11 ? 'позиции' : 'позиций'
+  const names = issuedItems.value.map((i) => `«${i.name}»`).join(', ')
+  return `Из ${total} ${noun} будет выдано только ${issuedItems.value.length}: ${names}.`
+})
 function close() {
   router.push(exitRoute)
 }
@@ -222,7 +229,6 @@ function confirmPartial() {
             <a-input
               ref="codeInputRef"
               v-model:value="codeInput"
-              size="large"
               allow-clear
               :placeholder="
                 isReturn
@@ -232,12 +238,10 @@ function confirmPartial() {
               class="td-toolbar__input"
               @press-enter="confirmByCode"
             >
-              <template #prefix><BarcodeOutlined class="td-toolbar__icon" /></template>
             </a-input>
-            <a-button size="large" @click="confirmByCode">Подтвердить</a-button>
+            <a-button @click="confirmByCode">Подтвердить</a-button>
             <a-tooltip title="Сканировать камерой">
               <a-button
-                size="large"
                 aria-label="Сканировать камерой"
                 :disabled="!pendingItems.length"
                 @click="scannerItemId = pendingItems[0]?.id ?? null"
@@ -251,7 +255,7 @@ function confirmPartial() {
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'item'">
                 <div class="td-item__name">{{ record.name }}</div>
-                <div class="td-item__category">{{ record.category }}</div>
+                <div class="td-item__category">{{ record.code }}</div>
               </template>
               <template v-else-if="column.key === 'state'">
                 <span v-if="record.problem" class="td-state td-state--problem">
@@ -262,7 +266,7 @@ function confirmPartial() {
                   <CheckCircleFilled />
                   Подтверждено
                 </span>
-                <span v-else class="td-state">Ждёт кода</span>
+                <span v-else class="td-state">Ожидает подтверждения</span>
               </template>
               <a-space v-else-if="column.key === 'actions'" :size="4">
                 <a-button
@@ -281,10 +285,10 @@ function confirmPartial() {
           </a-table>
 
           <footer class="td-footer">
-            <a-button size="large" @click="close">Отмена</a-button>
+            <a-button @click="close">Отмена</a-button>
             <div class="td-footer__main">
-              <a-button size="large" @click="openProblem(null)">Проблема с ТМЦ</a-button>
-              <a-button size="large" type="primary" :disabled="!canSubmit" @click="submit">
+              <a-button @click="openProblem(null)">Проблема с ТМЦ</a-button>
+              <a-button type="primary" :disabled="!canSubmit" @click="submit">
                 {{ isReturn ? 'Принять возврат' : 'Выдать' }}
               </a-button>
             </div>
@@ -386,8 +390,7 @@ function confirmPartial() {
       @ok="confirmPartial"
     >
       <p class="tmc-partial__text">
-        Будет выдано {{ scannedCount }} из {{ request.items.length }}. Невыданные ТМЦ освободятся для
-        других заявок и по этой заявке выдаваться не будут.
+        {{ partialSummary }} Остальные ТМЦ по этой заявке выдаваться не будут.
       </p>
       <ul class="tmc-partial__list">
         <li v-for="item in notIssuedItems" :key="item.id" class="tmc-partial__item">
@@ -481,10 +484,6 @@ function confirmPartial() {
   min-width: 0;
 }
 
-.td-toolbar__icon {
-  color: var(--tmc-icon);
-}
-
 .td-item__name {
   font-weight: 700;
   color: var(--tmc-text);
@@ -517,8 +516,6 @@ function confirmPartial() {
   justify-content: space-between;
   gap: 8px;
   margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--tmc-border-secondary);
 }
 
 .td-footer__main {
@@ -628,7 +625,8 @@ function confirmPartial() {
   justify-content: space-between;
   gap: 8px;
   padding: 8px 12px;
-  background: #fafbff;
+  /* фон страницы (bg layout); модал вне каркаса, поэтому с запасным значением */
+  background: var(--tmc-bg-layout, #f5f5f5);
   border-radius: 8px;
 }
 
