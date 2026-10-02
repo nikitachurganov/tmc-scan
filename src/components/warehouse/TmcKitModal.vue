@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { DeleteOutlined, ScanOutlined, UploadOutlined } from '@ant-design/icons-vue'
-import { message, Modal, type FormInstance } from 'ant-design-vue'
+import { DeleteOutlined, EditOutlined, ScanOutlined, UploadOutlined } from '@ant-design/icons-vue'
+import { Drawer, message, Modal, type FormInstance, type TableColumnsType } from 'ant-design-vue'
 import type { Rule } from 'ant-design-vue/es/form'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import TmcAddAdhocEquipment from './TmcAddAdhocEquipment.vue'
@@ -8,11 +8,30 @@ import TmcDurationInput from './TmcDurationInput.vue'
 import TmcEquipmentScanner from './TmcEquipmentScanner.vue'
 import TmcOverlayScroll from './TmcOverlayScroll.vue'
 import TmcKitComposition from './TmcKitComposition.vue'
+import TmcStatusTag from './TmcStatusTag.vue'
 import type { ScanResult } from './scan'
 import { useCurrentWarehouse } from '@/composables/useCurrentWarehouse'
 import { useIsMobile } from '@/composables/useIsMobile'
-import { useWarehouse, type KitInput } from '@/composables/useWarehouse'
-import type { Employee, EquipmentUnit, TmcKit, TmcType } from '@/mocks/tmc'
+import { useWarehouse, type KitInput, type ManualUnitStatus } from '@/composables/useWarehouse'
+import {
+  equipmentStatusLabels,
+  tmcKindLabel,
+  tmcStatusLabels,
+  type Employee,
+  type EquipmentUnit,
+  type TmcGroup,
+  type TmcKit,
+  type TmcType,
+  type UsageLogEntry,
+} from '@/mocks/tmc'
+import { rentalRangeLabel } from '@/utils/duration'
+
+/** Смена статуса единицы, сделанная в дровере; применяется вместе с сохранением ТМЦ */
+export interface UnitStatusChange {
+  unitId: number
+  status: ManualUnitStatus
+  comment: string
+}
 
 const props = defineProps<{
   open: boolean
@@ -22,14 +41,28 @@ const props = defineProps<{
   employees: Employee[]
   /** Единицы оборудования, доступные для этого комплекта */
   availableUnits: EquipmentUnit[]
+  /** Открыть карточку ТМЦ на просмотр (клик по названию в реестре); «Изменить» переводит в правку */
+  readonly?: boolean
 }>()
 
-const emit = defineEmits<{ close: []; submit: [payload: KitInput] }>()
+const emit = defineEmits<{ close: []; submit: [payload: KitInput, statusChanges: UnitStatusChange[]] }>()
+
+/**
+ * Создание — модал с двумя колонками; просмотр и редактирование — дровер справа с вкладками
+ * «Основная информация / Оборудование / Журнал выдачи». Поля и логика формы общие.
+ */
+const asDrawer = computed(() => props.kit !== null)
+type DrawerTab = 'info' | 'equipment' | 'log'
+const tab = ref<DrawerTab>('info')
+
+/** Режим дровера: просмотр карточки или правка */
+const mode = ref<'view' | 'edit'>('edit')
+const isView = computed(() => asDrawer.value && mode.value === 'view')
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 const isMobile = useIsMobile()
-const { equipment, templates, unitById } = useWarehouse()
+const { equipment, templates, unitById, logEntriesFor, kitAvailability, employeeName } = useWarehouse()
 const modalBodyStyle = computed(() =>
   isMobile.value
     ? { maxHeight: 'calc(100vh - 128px)', overflowY: 'auto' as const }
@@ -136,29 +169,198 @@ const rules: Record<string, Rule[]> = {
 watch(
   () => props.open,
   (open) => {
-    if (!open) return
-    form.type = props.kit?.type ?? 'single'
-    form.multiple = props.kit?.type === 'single' && !!props.kit.multiple
-    form.unitId =
-      props.kit?.type === 'single' && !props.kit.multiple ? props.kit.groups[0]?.unitIds[0] : undefined
-    form.name = props.kit?.name ?? ''
-    form.category = props.kit?.category
-    form.description = props.kit?.description ?? ''
-    form.usageRules = props.kit?.usageRules ?? ''
-    form.responsibleId = props.kit?.responsibleId
-    form.image = props.kit?.image
-    form.groups = props.kit
-      ? props.kit.groups.map((g) => ({ id: g.id, name: g.name, unitIds: [...g.unitIds] }))
-      : []
-    form.minRental = props.kit?.minRentalMinutes
-    form.maxRental = props.kit?.maxRentalMinutes
-    groupsError.value = ''
-    scanning.value = false
-    unitSearch.value = ''
-    formRef.value?.clearValidate()
-    initialState = formState()
+    if (open) loadForm()
   },
 )
+
+/** Заполнить форму из ТМЦ (или пустую); `keepTab` — остаться на текущей вкладке при отмене правки */
+function loadForm(keepTab = false) {
+  form.type = props.kit?.type ?? 'single'
+  form.multiple = props.kit?.type === 'single' && !!props.kit.multiple
+  form.unitId =
+    props.kit?.type === 'single' && !props.kit.multiple ? props.kit.groups[0]?.unitIds[0] : undefined
+  form.name = props.kit?.name ?? ''
+  form.category = props.kit?.category
+  form.description = props.kit?.description ?? ''
+  form.usageRules = props.kit?.usageRules ?? ''
+  form.responsibleId = props.kit?.responsibleId
+  form.image = props.kit?.image
+  form.groups = props.kit
+    ? props.kit.groups.map((g) => ({ id: g.id, name: g.name, unitIds: [...g.unitIds] }))
+    : []
+  form.minRental = props.kit?.minRentalMinutes
+  form.maxRental = props.kit?.maxRentalMinutes
+  groupsError.value = ''
+  scanning.value = false
+  unitSearch.value = ''
+  if (!keepTab) tab.value = 'info'
+  mode.value = props.readonly ? 'view' : 'edit'
+  statusChanges.value = {}
+  formRef.value?.clearValidate()
+  initialState = formState()
+}
+
+/* ---------- статусы единиц (только в дровере редактирования) ---------- */
+
+/** Черновик смен статуса: только единицы, которым поставили статус, отличный от текущего */
+const statusChanges = ref<Record<number, { status: ManualUnitStatus; comment: string }>>({})
+
+const MANUAL_STATUSES: ManualUnitStatus[] = ['available', 'damaged', 'lost']
+const unitStatusOptions = MANUAL_STATUSES.map((value) => ({ value, label: equipmentStatusLabels[value] }))
+
+/** Бронь и пользование задаёт заявка — такие единицы вручную не меняются */
+function isLocked(unit: EquipmentUnit): boolean {
+  return unit.status === 'booked' || unit.status === 'in_use'
+}
+
+function draftStatus(unit: EquipmentUnit): ManualUnitStatus | undefined {
+  if (isLocked(unit)) return undefined
+  return statusChanges.value[unit.id]?.status ?? (unit.status as ManualUnitStatus)
+}
+
+function setDraftStatus(unit: EquipmentUnit, status: unknown) {
+  const next = { ...statusChanges.value }
+  if (status === unit.status) delete next[unit.id]
+  else next[unit.id] = { status: status as ManualUnitStatus, comment: '' }
+  statusChanges.value = next
+}
+
+/** Комментарий спрашиваем, только когда единицу помечают повреждённой или утерянной */
+function needsComment(unit: EquipmentUnit): boolean {
+  const change = statusChanges.value[unit.id]
+  return change !== undefined && change.status !== 'available'
+}
+
+const selectedUnit = computed(() => (form.unitId !== undefined ? unitById(form.unitId) : undefined))
+
+/* ---------- журнал выдачи (только в дровере редактирования) ---------- */
+
+const logColumns: TableColumnsType = [
+  { title: '№ заявки', dataIndex: 'requestNumber', width: 130 },
+  { title: 'Оборудование', key: 'unit' },
+  { title: 'Пользователь', dataIndex: 'userFullName' },
+  { title: 'Выдано', dataIndex: 'issuedAt', width: 110 },
+  { title: 'Возвращено', key: 'returnedAt', width: 130 },
+  { title: 'Статус', key: 'status', width: 140 },
+]
+
+/** Одна выдача ТМЦ: все единицы, выданные по одной заявке */
+interface LogRow {
+  requestNumber: string
+  userFullName: string
+  issuedAt: string
+  units: UsageLogEntry[]
+  /** Для сортировки: самая свежая запись выдачи */
+  lastId: number
+}
+
+/** История выдач ТМЦ: строка на заявку, новые сверху */
+const logEntries = computed<LogRow[]>(() => {
+  const ids = props.kit?.groups.flatMap((g) => g.unitIds) ?? []
+  const byRequest = new Map<string, LogRow>()
+  for (const entry of ids.flatMap((id) => logEntriesFor(id))) {
+    const row = byRequest.get(entry.requestNumber) ?? {
+      requestNumber: entry.requestNumber,
+      userFullName: entry.userFullName,
+      issuedAt: entry.issuedAt,
+      units: [],
+      lastId: 0,
+    }
+    row.units.push(entry)
+    row.lastId = Math.max(row.lastId, entry.id)
+    byRequest.set(entry.requestNumber, row)
+  }
+  return [...byRequest.values()].sort((a, b) => b.lastId - a.lastId)
+})
+
+/** «Проектор, HDMI-кабель, Удлинитель» — названия без повторов и без количества */
+function logUnitsLabel(row: LogRow): string {
+  return [...new Set(row.units.map((u) => u.unitName))].join(', ')
+}
+
+/** Дата возврата: самая поздняя среди единиц; «—», пока что-то ещё на руках */
+function logReturnedAt(row: LogRow): string {
+  if (row.units.some((u) => !u.returnedAt)) return '—'
+  return row.units.map((u) => u.returnedAt!).sort(compareRuDates).pop() ?? '—'
+}
+
+/** «дд.мм.гггг» → по возрастанию даты */
+function compareRuDates(a: string, b: string): number {
+  const key = (value: string) => value.split('.').reverse().join('')
+  return key(a).localeCompare(key(b))
+}
+
+function logStatus(row: LogRow): string {
+  if (row.units.some((u) => u.lost)) return 'Утеряно'
+  return row.units.every((u) => u.returnedAt) ? 'Возвращено' : 'В пользовании'
+}
+
+/* ---------- оболочка: модал или дровер ---------- */
+
+const containerProps = computed(() =>
+  asDrawer.value
+    ? {
+        open: props.open,
+        width: isMobile.value ? '100%' : 760,
+        placement: 'right' as const,
+        destroyOnClose: true,
+        rootClassName: 'km km-drawer',
+      }
+    : {
+        open: props.open,
+        width: isMobile.value ? '100%' : 1100,
+        centered: !isMobile.value,
+        wrapClassName: isMobile.value ? 'km km-mobile' : 'km',
+        destroyOnClose: true,
+        bodyStyle: modalBodyStyle.value,
+      },
+)
+
+const titleText = computed(() => {
+  if (!asDrawer.value) return 'Добавить ТМЦ'
+  return isView.value ? (props.kit?.name ?? '') : 'Редактировать ТМЦ'
+})
+
+/* ---------- режим просмотра ---------- */
+
+const viewAvailability = computed(() => (props.kit ? kitAvailability(props.kit) : null))
+
+/** Правила режем на абзацы по пустым строкам — длинный текст читается кусками */
+const usageRuleParagraphs = computed(() =>
+  (props.kit?.usageRules ?? '')
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean),
+)
+
+function viewUnits(group: TmcGroup): EquipmentUnit[] {
+  return group.unitIds.map(unitById).filter((u): u is EquipmentUnit => u !== undefined)
+}
+
+/** «Отмена» в правке, открытой из просмотра: возвращаемся к просмотру, а не закрываем карточку */
+function cancelEdit() {
+  if (!props.readonly) {
+    requestClose()
+    return
+  }
+  const back = () => loadForm(true)
+  if (formState() === initialState) {
+    back()
+    return
+  }
+  Modal.confirm({
+    title: 'Отменить изменения?',
+    okText: 'Отменить',
+    cancelText: 'Продолжить',
+    centered: true,
+    onOk: back,
+  })
+}
+
+function closeAny() {
+  if (isView.value) emit('close')
+  else requestClose()
+}
 
 /**
  * Снимок заполненных полей: пустые группы не считаем — в режиме комплекта и экземпляров форма
@@ -178,6 +380,7 @@ function formState(): string {
     groups: form.groups.filter((g) => g.name.trim() || g.unitIds.length).map((g) => [g.name, g.unitIds]),
     minRental: form.minRental,
     maxRental: form.maxRental,
+    statuses: statusChanges.value,
   })
 }
 
@@ -328,6 +531,9 @@ async function submit() {
     formValid = false
   }
   groupsError.value = validateGroups()
+  // в дровере ошибка может быть на другой вкладке — переключаемся туда, где её видно
+  if (!formValid || rentalError.value) tab.value = 'info'
+  else if (groupsError.value) tab.value = 'equipment'
   if (
     !formValid ||
     groupsError.value ||
@@ -337,6 +543,11 @@ async function submit() {
   ) {
     return
   }
+  const groups = buildGroups()
+  const keptIds = new Set(groups.flatMap((g) => g.unitIds))
+  const changes: UnitStatusChange[] = Object.entries(statusChanges.value)
+    .map(([id, change]) => ({ unitId: Number(id), status: change.status, comment: change.comment }))
+    .filter((change) => keptIds.has(change.unitId))
   emit('submit', {
     type: form.type,
     multiple: form.type === 'single' ? form.multiple : undefined,
@@ -346,27 +557,32 @@ async function submit() {
     usageRules: form.usageRules,
     responsibleId: form.responsibleId,
     image: form.image,
-    groups: buildGroups(),
+    groups,
     minRentalMinutes: form.minRental,
     maxRentalMinutes: form.maxRental,
-  })
+  }, changes)
 }
 </script>
 
 <template>
-  <a-modal
-    :open="open"
-    :title="isEdit ? 'Редактировать ТМЦ' : 'Добавить ТМЦ'"
-    :width="isMobile ? '100%' : 1100"
-    :centered="!isMobile"
-    :wrap-class-name="isMobile ? 'km km-mobile' : 'km'"
-    destroy-on-close
-    :body-style="modalBodyStyle"
-    @cancel="requestClose"
-  >
-    <div class="km-columns">
-      <section class="km-col">
-        <h3 class="km-col__title">Основная информация</h3>
+  <component :is="asDrawer ? Drawer : Modal" v-bind="containerProps" @cancel="closeAny" @close="closeAny">
+    <template #title>
+      <span class="km-title">
+        {{ titleText }}
+        <TmcStatusTag v-if="isView && viewAvailability" :label="tmcStatusLabels[viewAvailability.status]" />
+      </span>
+    </template>
+
+    <!-- дровер: вкладки — продолжение шапки и прилипают к ней при прокрутке; разделы общие с модалом создания -->
+    <a-tabs v-if="asDrawer" v-model:active-key="tab" class="km-tabs">
+      <a-tab-pane key="info" tab="Основная информация" />
+      <a-tab-pane key="equipment" tab="Оборудование" />
+      <a-tab-pane key="log" tab="Журнал выдачи" />
+    </a-tabs>
+
+    <div class="km-columns" :class="{ 'km-columns--drawer': asDrawer }">
+      <section v-if="!isView" v-show="!asDrawer || tab === 'info'" class="km-col">
+        <h3 v-if="!asDrawer" class="km-col__title">Основная информация</h3>
         <TmcOverlayScroll class="km-col__scroll">
         <a-form ref="formRef" :model="form" :rules="rules" layout="vertical" @finish="submit">
           <a-form-item label="Наименование ТМЦ" name="name">
@@ -465,11 +681,11 @@ async function submit() {
         </TmcOverlayScroll>
       </section>
 
-      <a-divider type="vertical" class="km-divider" />
+      <a-divider v-if="!asDrawer" type="vertical" class="km-divider" />
 
-      <section class="km-col">
+      <section v-if="!isView" v-show="!asDrawer || tab === 'equipment'" class="km-col">
         <!-- тип определяет, что ниже: оборудование, экземпляры или состав комплекта; правил нет — отдельная форма для подписи -->
-        <h3 class="km-col__title">{{ form.type === 'kit' ? 'Состав комплекта' : 'Оборудование' }}</h3>
+        <h3 v-if="!asDrawer" class="km-col__title">{{ form.type === 'kit' ? 'Состав комплекта' : 'Оборудование' }}</h3>
         <TmcOverlayScroll class="km-col__scroll">
         <a-form layout="vertical">
           <a-form-item label="Тип">
@@ -494,7 +710,32 @@ async function submit() {
             :error="groupsError"
             :copies-mode="copiesMode"
             :copies-category="form.category"
-          />
+          >
+            <!-- статус каждой единицы: выбор прямо в строке, применяется по «Сохранить» -->
+            <template v-if="asDrawer" #unit-extra="{ unit }">
+              <a-tooltip v-if="isLocked(unit)" title="Статус ведёт заявка">
+                <span><TmcStatusTag :label="equipmentStatusLabels[unit.status as EquipmentUnit['status']]" /></span>
+              </a-tooltip>
+              <a-select
+                v-else
+                :value="draftStatus(unit)"
+                :options="unitStatusOptions"
+                size="small"
+                class="km-status"
+                :aria-label="`Статус: ${unit.name} ${unit.code}`"
+                @change="(value: unknown) => setDraftStatus(unit, value)"
+              />
+            </template>
+            <template v-if="asDrawer" #unit-below="{ unit }">
+              <a-input
+                v-if="needsComment(unit)"
+                v-model:value="statusChanges[unit.id]!.comment"
+                size="small"
+                :maxlength="500"
+                placeholder="Комментарий: что случилось"
+              />
+            </template>
+          </TmcKitComposition>
         </template>
         <template v-else>
           <div class="km-unit-row">
@@ -525,6 +766,29 @@ async function submit() {
             </a-button>
           </div>
           <div v-if="groupsError" class="km-unit__error" role="alert">{{ groupsError }}</div>
+          <!-- один экземпляр: статус выбранной единицы — под выбором оборудования -->
+          <a-form v-if="asDrawer && selectedUnit" layout="vertical" class="km-unit-status">
+            <a-form-item label="Статус">
+              <a-tooltip v-if="isLocked(selectedUnit)" title="Статус ведёт заявка">
+                <span><TmcStatusTag :label="equipmentStatusLabels[selectedUnit.status]" /></span>
+              </a-tooltip>
+              <template v-else>
+                <a-select
+                  :value="draftStatus(selectedUnit)"
+                  :options="unitStatusOptions"
+                  class="km-status km-status--wide"
+                  @change="(value: unknown) => setDraftStatus(selectedUnit!, value)"
+                />
+                <a-input
+                  v-if="needsComment(selectedUnit)"
+                  v-model:value="statusChanges[selectedUnit.id]!.comment"
+                  :maxlength="500"
+                  placeholder="Комментарий: что случилось"
+                  class="km-status-comment"
+                />
+              </template>
+            </a-form-item>
+          </a-form>
           <div class="km-adhoc">
             <span class="km-adhoc__text">Оборудование не стоит на учёте?</span>
             <a-button type="link" class="km-adhoc__link" @click="addingAdhocUnit = true">Добавить</a-button>
@@ -544,17 +808,112 @@ async function submit() {
         </template>
         </TmcOverlayScroll>
       </section>
+
+      <!-- просмотр карточки: те же разделы, но значениями, без полей ввода -->
+      <template v-if="isView && kit">
+        <section v-show="tab === 'info'" class="km-col km-view">
+          <img v-if="kit.image" :src="kit.image" alt="Изображение ТМЦ" class="km-view__image" />
+
+          <!-- главное — короткими карточками: быстро найти нужное, не читая текст целиком -->
+          <div class="km-facts">
+            <div class="km-fact">
+              <span class="km-fact__label">Категория</span>
+              <span class="km-fact__value">{{ kit.category }}</span>
+            </div>
+            <div class="km-fact">
+              <span class="km-fact__label">Тип</span>
+              <span class="km-fact__value">{{ tmcKindLabel(kit) }}</span>
+            </div>
+            <div class="km-fact">
+              <span class="km-fact__label">Ответственный</span>
+              <span class="km-fact__value">{{ employeeName(kit.responsibleId) }}</span>
+            </div>
+            <div class="km-fact">
+              <span class="km-fact__label">Срок аренды</span>
+              <span class="km-fact__value">
+                {{ kit.minRentalMinutes || kit.maxRentalMinutes ? rentalRangeLabel(kit.minRentalMinutes, kit.maxRentalMinutes) : 'Не ограничен' }}
+              </span>
+            </div>
+          </div>
+
+          <section class="km-block">
+            <h4 class="km-block__title">Описание</h4>
+            <p v-if="kit.description" class="km-block__text">{{ kit.description }}</p>
+            <p v-else class="km-block__empty">Описание не добавлено</p>
+          </section>
+
+          <section class="km-block">
+            <h4 class="km-block__title">Правила использования</h4>
+            <div v-if="kit.usageRules" class="km-rules">
+              <p v-for="(paragraph, index) in usageRuleParagraphs" :key="index" class="km-block__text">
+                {{ paragraph }}
+              </p>
+            </div>
+            <p v-else class="km-block__empty">Правила не добавлены</p>
+          </section>
+        </section>
+
+        <section v-show="tab === 'equipment'" class="km-col km-view">
+          <p class="km-view__summary">
+            {{ tmcKindLabel(kit) }} · {{ viewAvailability?.total ?? 0 }} ед.
+            <template v-if="viewAvailability && viewAvailability.available < viewAvailability.total">
+              · доступно {{ viewAvailability.available }}
+            </template>
+          </p>
+          <div v-for="group in kit.groups" :key="group.id" class="km-view__group">
+            <h4 v-if="kit.type === 'kit'" class="km-view__group-name">{{ group.name }}</h4>
+            <ul class="km-view__units">
+              <li v-for="unit in viewUnits(group)" :key="unit.id" class="km-view__unit">
+                <div class="km-view__unit-text">
+                  <RouterLink :to="{ name: 'equipment', params: { id: unit.id } }" class="km-view__unit-name">
+                    {{ unit.name }}
+                  </RouterLink>
+                  <div class="km-view__unit-code">{{ unit.code }}</div>
+                  <div v-if="unit.problem?.comment" class="km-view__unit-note">{{ unit.problem.comment }}</div>
+                </div>
+                <TmcStatusTag :label="equipmentStatusLabels[unit.status]" />
+              </li>
+            </ul>
+          </div>
+        </section>
+      </template>
+
+      <!-- журнал выдачи: все выдачи единиц этого ТМЦ, только просмотр -->
+      <section v-if="asDrawer" v-show="tab === 'log'" class="km-col">
+        <a-table
+          :columns="logColumns"
+          :data-source="logEntries"
+          row-key="requestNumber"
+          size="small"
+          :pagination="logEntries.length > 10 ? { pageSize: 10, showSizeChanger: false } : false"
+          :scroll="{ x: 680 }"
+          :locale="{ emptyText: 'Выдач этого ТМЦ ещё не было' }"
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'unit'">{{ logUnitsLabel(record as LogRow) }}</template>
+            <template v-else-if="column.key === 'returnedAt'">{{ logReturnedAt(record as LogRow) }}</template>
+            <TmcStatusTag v-else-if="column.key === 'status'" :label="logStatus(record as LogRow)" />
+          </template>
+        </a-table>
+      </section>
     </div>
 
     <template #footer>
-      <div class="km-footer">
-        <a-button :block="isMobile" @click="requestClose">Отмена</a-button>
+      <div v-if="isView" class="km-footer">
+        <a-button :block="isMobile" @click="emit('close')">Закрыть</a-button>
+        <a-button type="primary" :block="isMobile" @click="mode = 'edit'">
+          <template #icon><EditOutlined /></template>
+          Изменить
+        </a-button>
+      </div>
+      <div v-else class="km-footer">
+        <a-button :block="isMobile" @click="cancelEdit">Отмена</a-button>
         <a-button type="primary" :block="isMobile" @click="submit">
           {{ isEdit ? 'Сохранить' : 'Создать ТМЦ' }}
         </a-button>
       </div>
     </template>
-  </a-modal>
+  </component>
 </template>
 
 <style scoped>
@@ -705,6 +1064,206 @@ async function submit() {
   gap: 8px;
 }
 
+/* дровер: разделы друг под другом (видна одна вкладка), прокручивается тело дровера */
+.km-columns--drawer {
+  display: block;
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  padding: 16px 24px 24px;
+  overflow-y: auto;
+}
+
+.km-columns--drawer .km-col {
+  height: auto;
+}
+
+.km-columns--drawer .km-col__scroll {
+  flex: none;
+}
+
+.km-columns--drawer .km-col__scroll :deep(.os__viewport > div) {
+  padding-right: 0;
+}
+
+/* вкладки — часть шапки дровера: на всю ширину, без отступа от заголовка, прилипают при прокрутке */
+.km-tabs {
+  flex: none;
+  margin: 0;
+  padding: 0 24px;
+  background: #fff;
+  /* граница от стенки до стенки дровера: рисует контейнер, а не полоса вкладок с отступами */
+  border-bottom: 1px solid #f0f0f0;
+}
+
+/* полоса активной вкладки ложится на общую границу */
+.km-tabs :deep(.ant-tabs-nav) {
+  margin: 0 0 -1px;
+}
+
+.km-tabs :deep(.ant-tabs-nav::before) {
+  display: none;
+}
+
+.km-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* просмотр карточки */
+/* просмотр карточки: сверху ключевые факты карточками, ниже текстовые блоки с воздухом между ними */
+.km-view__image {
+  width: 100%;
+  max-height: 200px;
+  margin-bottom: 16px;
+  object-fit: cover;
+  border: 1px solid #f0f0f0;
+  border-radius: 12px;
+}
+
+.km-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.km-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  background: var(--tmc-bg-layout, #f5f5f5);
+  border-radius: 10px;
+}
+
+.km-fact__label {
+  font-size: 12px;
+  line-height: 16px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.km-fact__value {
+  font-weight: 600;
+  line-height: 22px;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.km-block {
+  margin-top: 24px;
+}
+
+.km-block__title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.km-block__text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 24px;
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.km-block__empty {
+  margin: 0;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* правила — абзацы в светлой карточке с левой полосой, чтобы глаз цеплялся за начало каждого */
+.km-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--tmc-bg-layout, #f5f5f5);
+  border-radius: 10px;
+}
+.km-view__summary {
+  margin: 0 0 12px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.km-view__group + .km-view__group {
+  margin-top: 16px;
+}
+
+.km-view__group-name {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.km-view__units {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.km-view__unit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--tmc-bg-layout, #f5f5f5);
+  border-radius: 6px;
+}
+
+.km-view__unit-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.km-view__unit-name {
+  font-weight: 600;
+}
+
+.km-view__unit-code,
+.km-view__unit-note {
+  font-size: 13px;
+  line-height: 18px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.km-view__unit-note {
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* статус единицы в строке состава */
+.km-status {
+  flex: none;
+  width: 150px;
+}
+
+.km-status--wide {
+  width: 100%;
+}
+
+.km-status-comment {
+  margin-top: 8px;
+}
+
+.km-unit-status {
+  margin-top: 16px;
+}
+
+.km-log__name {
+  font-weight: 600;
+}
+
+.km-log__code {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
 @media (max-width: 767px) {
   .km-columns {
     flex-direction: column;
@@ -763,7 +1322,22 @@ async function submit() {
 }
 
 /* первый уровень заголовков: название окна крупнее подзаголовков колонок (16px) */
-.km .ant-modal-title {
+/* дровер: шапка и вкладки — единое целое, граница только под вкладками */
+.km-drawer .ant-drawer-header {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+/* вкладки вне прокручиваемой области: их граница и ширина не зависят от полосы прокрутки */
+.km-drawer .ant-drawer-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.km .ant-modal-title,
+.km-drawer .ant-drawer-title {
   font-size: 20px;
   line-height: 28px;
   font-weight: 700;

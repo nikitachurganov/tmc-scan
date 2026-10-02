@@ -4,16 +4,17 @@ import { message, type TableColumnsType } from 'ant-design-vue'
 import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import TmcDesktopLayout from '@/components/warehouse/TmcDesktopLayout.vue'
-import TmcKitModal from '@/components/warehouse/TmcKitModal.vue'
+import TmcKitModal, { type UnitStatusChange } from '@/components/warehouse/TmcKitModal.vue'
 import TmcStatusTag from '@/components/warehouse/TmcStatusTag.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useWarehouse, type KitInput } from '@/composables/useWarehouse'
 import {
   equipmentStatusLabels,
+  tmcStatusLabels,
   tmcKindLabel,
   type EquipmentStatus,
-  type TmcGroup,
   type TmcKit,
+  type TmcStatus,
 } from '@/mocks/tmc'
 import { rentalRangeLabel } from '@/utils/duration'
 
@@ -24,11 +25,13 @@ const {
   unitById,
   availableUnitsFor,
   kitStatus,
+  kitAvailability,
   kitUnitCount,
   employeeName,
   removeKitBlockReason,
   addKit,
   updateKit,
+  setUnitStatus,
   removeKit,
 } = useWarehouse()
 
@@ -36,12 +39,12 @@ const isMobile = useIsMobile()
 
 const search = ref('')
 const categoryFilter = ref<string | undefined>()
-const statusFilter = ref<EquipmentStatus | undefined>()
+const statusFilter = ref<TmcStatus | undefined>()
 
 const categoryOptions = computed(() => categories.value.map((value) => ({ value })))
-const statusOptions = (Object.keys(equipmentStatusLabels) as EquipmentStatus[]).map((value) => ({
+const statusOptions = (Object.keys(tmcStatusLabels) as TmcStatus[]).map((value) => ({
   value,
-  label: equipmentStatusLabels[value],
+  label: tmcStatusLabels[value],
 }))
 
 function kitCodes(kit: TmcKit): string[] {
@@ -71,49 +74,84 @@ watch([search, categoryFilter, statusFilter], () => {
 })
 
 const columns: TableColumnsType = [
-  { title: 'Название', dataIndex: 'name' },
+  { title: 'Название', key: 'name' },
   { title: 'Тип', key: 'type', width: 140 },
   { title: 'Категория', dataIndex: 'category' },
   { title: 'Ответственный', key: 'responsible' },
   { title: 'Состав', key: 'count', width: 100 },
   { title: 'Срок аренды', key: 'rental', width: 170 },
   { title: 'Статус', key: 'status', width: 170 },
-  { title: '', key: 'actions', width: 180 },
+  { title: '', key: 'actions', width: 190 },
 ]
 
 /** «5 ед.» — сколько единиц в составе, для нескольких экземпляров тоже просто количество */
 function compositionLabel(kit: TmcKit): string {
+  const { available, total } = kitAvailability(kit)
+  // у нескольких экземпляров видно, сколько осталось свободно
+  if (kit.type === 'single' && kit.multiple && available < total) return `${available} из ${total} ед.`
   return `${kitUnitCount(kit)} ед.`
 }
 
-/** Единицы группы с кодами — для ссылок на оборудование */
-function unitsOf(group: TmcGroup): { id: number; code: string }[] {
-  return group.unitIds.map((id) => ({ id, code: unitById(id)?.code ?? String(id) }))
+/** Подсказка к «Недоступно»: какие единицы и в каком статусе */
+function unavailableHint(kit: TmcKit): string[] {
+  return kitAvailability(kit).reasons.map((r) => `${r.name} · ${r.code} — ${equipmentStatusLabels[r.status]}`)
+}
+
+interface KitUnit {
+  id: number
+  name: string
+  code: string
+  status: EquipmentStatus
+}
+
+function kitUnitIds(kit: TmcKit): number[] {
+  return kit.groups.flatMap((g) => g.unitIds)
+}
+
+/** Единицы состава построчно: у каждой своя ссылка на оборудование и свой статус */
+function kitUnits(kit: TmcKit): KitUnit[] {
+  return kitUnitIds(kit).flatMap((id) => {
+    const unit = unitById(id)
+    return unit ? [{ id, name: unit.name, code: unit.code, status: unit.status }] : []
+  })
 }
 
 const groupColumns: TableColumnsType = [
   { title: 'Оборудование', key: 'name', width: 260 },
-  { title: 'Инвентарный код', key: 'codes' },
+  { title: 'Инвентарный код', key: 'code' },
+  { title: 'Статус', key: 'status', width: 170 },
 ]
 
 const modalOpen = ref(false)
 const editing = ref<TmcKit | null>(null)
+/** Карточка открыта на просмотр (клик по названию), а не сразу на правку */
+const viewOnly = ref(false)
 
 const modalUnits = computed(() => availableUnitsFor(editing.value?.id))
 
 function openAdd() {
   editing.value = null
+  viewOnly.value = false
   modalOpen.value = true
 }
 
 function openEdit(kit: TmcKit) {
   editing.value = kit
+  viewOnly.value = false
   modalOpen.value = true
 }
 
-function submit(payload: KitInput) {
+function openView(kit: TmcKit) {
+  editing.value = kit
+  viewOnly.value = true
+  modalOpen.value = true
+}
+
+/** Сохранение: поля и состав ТМЦ, а в дровере ещё и смены статусов единиц */
+function submit(payload: KitInput, statusChanges: UnitStatusChange[]) {
   if (editing.value) {
     updateKit(editing.value.id, payload)
+    statusChanges.forEach((change) => setUnitStatus(change.unitId, change.status, change.comment))
     message.success('Изменения сохранены')
   } else {
     addKit(payload)
@@ -187,37 +225,42 @@ function remove(kit: TmcKit) {
         <template #expandedRowRender="{ record }">
           <a-table
             :columns="groupColumns"
-            :data-source="record.groups"
+            :data-source="kitUnits(record as TmcKit)"
             :pagination="false"
             row-key="id"
             class="rv-nested"
           >
-            <template #bodyCell="{ column, record: group }">
-              <template v-if="column.key === 'name'">
-                {{ group.name }}<span v-if="group.unitIds.length > 1" class="rv-nested__qty"> ×{{ group.unitIds.length }}</span>
-              </template>
-              <template v-else-if="column.key === 'codes'">
-                <template v-for="(unit, index) in unitsOf(group as TmcGroup)" :key="unit.id">
-                  <RouterLink :to="{ name: 'equipment', params: { id: unit.id } }">
-                    {{ unit.code }}
-                  </RouterLink>
-                  <span v-if="index < unitsOf(group as TmcGroup).length - 1">, </span>
-                </template>
-              </template>
+            <template #bodyCell="{ column, record: unit }">
+              <template v-if="column.key === 'name'">{{ unit.name }}</template>
+              <RouterLink v-else-if="column.key === 'code'" :to="{ name: 'equipment', params: { id: unit.id } }">
+                {{ unit.code }}
+              </RouterLink>
+              <TmcStatusTag
+                v-else-if="column.key === 'status'"
+                :label="equipmentStatusLabels[(unit as KitUnit).status]"
+              />
             </template>
           </a-table>
         </template>
         <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'type'">{{ tmcKindLabel(record as TmcKit) }}</template>
+          <a-button v-if="column.key === 'name'" type="link" class="rv-name" @click="openView(record as TmcKit)">
+            {{ record.name }}
+          </a-button>
+          <template v-else-if="column.key === 'type'">{{ tmcKindLabel(record as TmcKit) }}</template>
           <template v-else-if="column.key === 'responsible'">{{ employeeName(record.responsibleId) }}</template>
           <template v-else-if="column.key === 'count'">{{ compositionLabel(record as TmcKit) }}</template>
           <template v-else-if="column.key === 'rental'">
             {{ rentalRangeLabel((record as TmcKit).minRentalMinutes, (record as TmcKit).maxRentalMinutes) }}
           </template>
-          <TmcStatusTag
-            v-else-if="column.key === 'status'"
-            :label="equipmentStatusLabels[kitStatus(record as TmcKit)]"
-          />
+          <template v-else-if="column.key === 'status'">
+            <a-tooltip v-if="kitStatus(record as TmcKit) === 'unavailable'" placement="topLeft">
+              <template #title>
+                <div v-for="line in unavailableHint(record as TmcKit)" :key="line">{{ line }}</div>
+              </template>
+              <span class="rv-status-hint"><TmcStatusTag :label="tmcStatusLabels.unavailable" /></span>
+            </a-tooltip>
+            <TmcStatusTag v-else :label="tmcStatusLabels[kitStatus(record as TmcKit)]" />
+          </template>
           <a-space v-else-if="column.key === 'actions'" :size="4">
             <a-button type="link" size="small" @click="openEdit(record as TmcKit)">Изменить</a-button>
             <a-tooltip v-if="removeKitBlockReason(record.id)" :title="removeKitBlockReason(record.id)">
@@ -249,8 +292,10 @@ function remove(kit: TmcKit) {
       <div v-if="!rows.length" class="rv-empty">Ничего не найдено</div>
       <article v-for="kit in pagedRows" :key="kit.id" class="rv-kit">
         <header class="rv-kit__head">
-          <h2 class="rv-kit__title">{{ kit.name }}</h2>
-          <TmcStatusTag :label="equipmentStatusLabels[kitStatus(kit)]" />
+          <h2 class="rv-kit__title">
+            <a-button type="link" class="rv-name rv-name--title" @click="openView(kit)">{{ kit.name }}</a-button>
+          </h2>
+          <TmcStatusTag :label="tmcStatusLabels[kitStatus(kit)]" />
         </header>
         <dl class="rv-kit__fields">
           <div class="rv-kit__field">
@@ -277,18 +322,14 @@ function remove(kit: TmcKit) {
         <a-collapse ghost class="rv-kit__groups">
           <a-collapse-panel key="groups" header="Показать состав">
             <ul class="rv-groups">
-              <li v-for="group in kit.groups" :key="group.id" class="rv-group rv-group--stack">
-                <span class="rv-group__name">
-                  {{ group.name }}<template v-if="group.unitIds.length > 1"> ×{{ group.unitIds.length }}</template>
-                </span>
-                <span class="rv-group__codes">
-                  <template v-for="(unit, index) in unitsOf(group)" :key="unit.id">
-                    <RouterLink :to="{ name: 'equipment', params: { id: unit.id } }">
-                      {{ unit.code }}
-                    </RouterLink>
-                    <span v-if="index < unitsOf(group).length - 1">, </span>
-                  </template>
-                </span>
+              <li v-for="unit in kitUnits(kit)" :key="unit.id" class="rv-group rv-group--unit">
+                <div class="rv-group__text">
+                  <span class="rv-group__name">{{ unit.name }}</span>
+                  <RouterLink :to="{ name: 'equipment', params: { id: unit.id } }" class="rv-group__codes">
+                    {{ unit.code }}
+                  </RouterLink>
+                </div>
+                <TmcStatusTag :label="equipmentStatusLabels[unit.status]" />
               </li>
             </ul>
           </a-collapse-panel>
@@ -334,6 +375,7 @@ function remove(kit: TmcKit) {
       :categories="categories"
       :employees="employees"
       :available-units="modalUnits"
+      :readonly="viewOnly"
       @close="modalOpen = false"
       @submit="submit"
     />
@@ -341,6 +383,24 @@ function remove(kit: TmcKit) {
 </template>
 
 <style scoped>
+/* название ТМЦ — ссылка на карточку: перенос длинных названий, без отступов кнопки */
+.rv-name {
+  height: auto;
+  padding: 0;
+  text-align: left;
+  white-space: normal;
+}
+
+.rv-name--title {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/* «Недоступно» с подсказкой причин: курсор показывает, что можно навести */
+.rv-status-hint {
+  cursor: help;
+}
+
 .rv-intro {
   display: flex;
   flex-direction: column;
@@ -399,10 +459,6 @@ function remove(kit: TmcKit) {
 
 .rv-nested :deep(.ant-table-tbody > tr:last-child > td) {
   border-bottom: 0;
-}
-
-.rv-nested__qty {
-  color: var(--tmc-text-tertiary);
 }
 
 .rv-search {
@@ -524,13 +580,19 @@ function remove(kit: TmcKit) {
   margin-top: 4px;
 }
 
-.rv-group--stack {
-  flex-direction: column;
-  gap: 0;
+.rv-group--unit {
+  align-items: center;
+  justify-content: space-between;
   font-size: 13px;
 }
 
-.rv-group--stack .rv-group__name {
+.rv-group--unit .rv-group__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rv-group--unit .rv-group__name {
   min-width: 0;
 }
 

@@ -18,6 +18,7 @@ const colors: Record<string, string> = {
   Забронировано: 'gold',
   Повреждено: 'orange',
   Утеряно: 'red',
+  Недоступно: 'volcano',
 }
 
 const color = computed(() => colors[props.label] ?? 'default')

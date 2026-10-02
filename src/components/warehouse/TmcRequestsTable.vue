@@ -6,7 +6,8 @@ import TmcRequestDetails, { type RequestDetailItem } from '@/components/warehous
 import TmcStatusTag from '@/components/warehouse/TmcStatusTag.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useWarehouse } from '@/composables/useWarehouse'
-import type { RequestStatus, WarehouseRequest } from '@/mocks/tmc'
+import TmcKitCard from './TmcKitCard.vue'
+import type { RequestStatus, TmcKit, WarehouseRequest } from '@/mocks/tmc'
 import { requestDates, type RequestDates } from '@/utils/requestDates'
 
 /**
@@ -49,13 +50,13 @@ const props = withDefaults(
 
 const router = useRouter()
 const isMobile = useIsMobile()
-const { requestItems, requestById, kitForItemName, advanceRequestStatus, rejectRequest } = useWarehouse()
+const { requestTmcList, requestById, advanceRequestStatus, rejectRequest } = useWarehouse()
 
-/** «Фотоаппарат», а для нескольких ТМЦ — «Фотоаппарат +1» */
+/** «Набор для презентаций», а для нескольких ТМЦ — «Набор для презентаций +1» */
 function itemsLabel(request: WarehouseRequest): string {
-  const [first, ...others] = requestItems(request)
+  const [first, ...others] = requestTmcList(request)
   if (!first) return ''
-  return others.length ? `${first.name} +${others.length}` : first.name
+  return others.length ? `${first.kit.name} +${others.length}` : first.kit.name
 }
 
 interface Row extends RequestDates {
@@ -142,6 +143,9 @@ function advance(row: Row, successText: string) {
   if (advanceRequestStatus(row.id)) message.success(successText)
 }
 
+/** Карточка ТМЦ, открытая по названию в составе заявки */
+const openedKit = ref<TmcKit | null>(null)
+
 /** Отклонение: сначала окно с обязательной причиной отказа */
 const rejectTarget = ref<Row | null>(null)
 const rejectReason = ref('')
@@ -178,18 +182,20 @@ function isOnHand(status: RequestStatus) {
   return status === 'В пользовании'
 }
 
-/** Состав заявки для раскрытой строки: единица + комплект по реестру, проблема, «не выдано» */
+/** Состав заявки для раскрытой строки: каждое заказанное ТМЦ со всеми его единицами */
 function detailItems(request: WarehouseRequest): RequestDetailItem[] {
-  return requestItems(request).map((unit) => ({
-    id: unit.id,
-    name: unit.name,
-    category: unit.category,
-    code: unit.code,
-    status: unit.status,
-    origin: unit.origin,
-    kitName: kitForItemName(unit.name)?.name ?? null,
-    problem: unit.problem,
-    notIssued: request.notIssuedIds.includes(unit.id),
+  return requestTmcList(request).map(({ kit, units }) => ({
+    id: kit.id,
+    kit,
+    units: units.map((unit) => ({
+      id: unit.id,
+      name: unit.name,
+      code: unit.code,
+      status: unit.status,
+      origin: unit.origin,
+      problem: unit.problem,
+      notIssued: request.notIssuedIds.includes(unit.id),
+    })),
   }))
 }
 </script>
@@ -209,6 +215,7 @@ function detailItems(request: WarehouseRequest): RequestDetailItem[] {
           v-if="requestById((record as Row).id)"
           :request="requestById((record as Row).id)!"
           :items="detailItems(requestById((record as Row).id)!)"
+          @open-kit="openedKit = $event"
         />
       </template>
       <template #bodyCell="{ column, record }">
@@ -302,6 +309,7 @@ function detailItems(request: WarehouseRequest): RequestDetailItem[] {
             v-if="requestById(row.id)"
             :request="requestById(row.id)!"
             :items="detailItems(requestById(row.id)!)"
+            @open-kit="openedKit = $event"
           />
         </a-collapse-panel>
       </a-collapse>
@@ -335,6 +343,8 @@ function detailItems(request: WarehouseRequest): RequestDetailItem[] {
       class="rq-pagination"
     />
   </div>
+
+  <TmcKitCard :kit="openedKit" @close="openedKit = null" />
 
   <a-modal
     :open="rejectTarget !== null"

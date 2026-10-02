@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue'
 import {
+  adhocCode,
   createWarehouseData,
   CURRENT_EMPLOYEE_ID,
   employees,
@@ -11,6 +12,7 @@ import {
   type RequestStatus,
   type TmcChannel,
   type TmcKit,
+  type TmcStatus,
   type UsageLogEntry,
   type UsageRuleTemplate,
   type WarehouseRequest,
@@ -38,6 +40,9 @@ export interface ProblemInput {
 }
 
 export type TemplateInput = Omit<UsageRuleTemplate, 'id'>
+
+/** Статусы, которые кладовщик ставит единице вручную; «Забронировано» и «В пользовании» задаёт заявка */
+export type ManualUnitStatus = Extract<EquipmentStatus, 'available' | 'damaged' | 'lost'>
 
 const state = reactive(createWarehouseData())
 
@@ -78,6 +83,20 @@ function requestItems(request: WarehouseRequest): EquipmentUnit[] {
     .filter((i): i is EquipmentUnit => i !== undefined)
 }
 
+/** ТМЦ реестра, заказанные в заявке, и их единицы: на комплект — весь комплект, на несколько экземпляров — выбранные */
+function requestTmcList(request: WarehouseRequest): { kit: TmcKit; units: EquipmentUnit[] }[] {
+  return request.tmc.flatMap(({ kitId }) => {
+    const kit = state.kits.find((k) => k.id === kitId)
+    if (!kit) return []
+    const units = kit.groups
+      .flatMap((g) => g.unitIds)
+      .filter((id) => request.itemIds.includes(id))
+      .map(unitById)
+      .filter((u): u is EquipmentUnit => u !== undefined)
+    return [{ kit, units }]
+  })
+}
+
 /** Единицы оборудования, которые можно добавить в комплект `kitId` (или в новый) */
 function availableUnitsFor(kitId?: number): EquipmentUnit[] {
   // невыданное при частичной выдаче к заявке больше не привязано
@@ -108,8 +127,43 @@ function kitUnitIds(kit: TmcKit): number[] {
   return kit.groups.flatMap((g) => g.unitIds)
 }
 
-function kitStatus(kit: TmcKit): EquipmentStatus {
-  return unitsStatus(kitUnitIds(kit))
+/** Доступность ТМЦ в реестре: итоговый статус, сколько единиц свободно и что мешает */
+export interface KitAvailability {
+  status: TmcStatus
+  available: number
+  total: number
+  /** Недоступные единицы — для подсказки к статусу */
+  reasons: { name: string; code: string; status: EquipmentStatus }[]
+}
+
+/**
+ * Правила статуса ТМЦ:
+ * - несколько экземпляров (пул) — «Доступно», пока свободен хотя бы один экземпляр;
+ * - комплект и один экземпляр — доступен, только если доступны все единицы;
+ * - недоступно: все единицы в одном состоянии — оно и есть статус (например, весь комплект в пользовании),
+ *   в разных — «Недоступно» с причинами.
+ */
+function kitAvailability(kit: TmcKit): KitAvailability {
+  const units = kitUnitIds(kit)
+    .map(unitById)
+    .filter((u): u is EquipmentUnit => u !== undefined)
+  const available = units.filter((u) => u.status === 'available').length
+  const reasons = units
+    .filter((u) => u.status !== 'available')
+    .map((u) => ({ name: u.name, code: u.code, status: u.status }))
+  const base = { available, total: units.length, reasons }
+
+  const isPool = kit.type === 'single' && !!kit.multiple
+  if (!units.length || available === units.length || (isPool && available > 0)) {
+    return { ...base, status: 'available' }
+  }
+  const statuses = new Set(units.map((u) => u.status))
+  const [only] = statuses
+  return { ...base, status: statuses.size === 1 && only ? only : 'unavailable' }
+}
+
+function kitStatus(kit: TmcKit): TmcStatus {
+  return kitAvailability(kit).status
 }
 
 /** Всего единиц в составе (для нескольких экземпляров — сколько их заведено) */
@@ -188,7 +242,7 @@ function addAdhocUnits(input: AdhocUnitInput, count = 1): EquipmentUnit[] {
       id,
       name: input.name.trim(),
       category: input.category.trim(),
-      code: `ADHOC-${id}`,
+      code: adhocCode(id),
       status: 'available',
       origin: 'adhoc',
     }
@@ -383,6 +437,27 @@ function reportProblem(unitId: number, input: ProblemInput, requestId?: number):
   return true
 }
 
+/**
+ * Сменить статус единицы вручную из реестра. Единицу в брони или в пользовании менять нельзя:
+ * её статус ведёт заявка. «Повреждено» и «Утеряно» записывают проблему с комментарием, «Доступно» её снимает.
+ */
+function setUnitStatus(unitId: number, status: ManualUnitStatus, comment?: string): boolean {
+  const unit = unitById(unitId)
+  if (!unit || unit.status === 'booked' || unit.status === 'in_use') return false
+  if (status === 'available') {
+    unit.problem = undefined
+  } else {
+    unit.problem = {
+      type: status === 'lost' ? 'lost' : 'damage',
+      comment: comment?.trim() || undefined,
+      reportedAt: nowRu(),
+      reportedBy: CURRENT_USER_NAME,
+    }
+  }
+  unit.status = status
+  return true
+}
+
 /** Проблема устранена: единица возвращается в оборот (или остаётся в пользовании, если она на руках) */
 function resolveProblem(unitId: number): boolean {
   const unit = unitById(unitId)
@@ -485,12 +560,14 @@ export function useWarehouse() {
     categories,
     requestById,
     requestItems,
+    requestTmcList,
     unitById,
     kitForUnit,
     kitForItemName,
     availableUnitsFor,
     unitsStatus,
     kitStatus,
+    kitAvailability,
     kitUnitCount,
     kitAvailableQuantity,
     employeeName,
@@ -507,6 +584,7 @@ export function useWarehouse() {
     returnRequest,
     reportProblem,
     resolveProblem,
+    setUnitStatus,
     warehouseById,
     updateWarehouse,
     updateWarehouseChannels,

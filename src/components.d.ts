@@ -68,6 +68,7 @@ declare module 'vue' {
     TmcEquipmentScanner: typeof import('./components/warehouse/TmcEquipmentScanner.vue')['default']
     TmcIssueSummary: typeof import('./components/warehouse/TmcIssueSummary.vue')['default']
     TmcItemRow: typeof import('./components/tmc/TmcItemRow.vue')['default']
+    TmcKitCard: typeof import('./components/warehouse/TmcKitCard.vue')['default']
     TmcKitComposition: typeof import('./components/warehouse/TmcKitComposition.vue')['default']
     TmcKitModal: typeof import('./components/warehouse/TmcKitModal.vue')['default']
     TmcMetricCard: typeof import('./components/warehouse/TmcMetricCard.vue')['default']

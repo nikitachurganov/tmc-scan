@@ -13,3 +13,27 @@ body {
 :root {
   --ant-font-family: 'Inter Variable', Inter, -apple-system, 'Segoe UI', sans-serif;
 }
+
+/* окна подтверждения (Modal.confirm, Popconfirm): кнопки выровнены по левой стороне */
+.ant-modal-confirm .ant-modal-confirm-btns {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+  float: none;
+  text-align: left;
+}
+
+.ant-modal-confirm .ant-modal-confirm-btns > .ant-btn + .ant-btn {
+  margin-inline-start: 0;
+}
+
+.ant-popconfirm .ant-popconfirm-buttons > .ant-btn {
+  margin-inline-start: 0;
+}
+
+.ant-popconfirm .ant-popconfirm-buttons {
+  gap: 8px;
+  display: flex;
+  justify-content: flex-start;
+  text-align: left;
+}

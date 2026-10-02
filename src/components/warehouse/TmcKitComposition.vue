@@ -135,6 +135,8 @@ const copiesFreeUnits = computed(() => {
             <div class="kc__unit-name">{{ unit.name }}</div>
             <div class="kc__unit-code">{{ unit.code }}</div>
           </div>
+          <!-- место для статуса единицы (в дровере редактирования) -->
+          <slot name="unit-extra" :unit="unit" />
           <a-button
             type="text"
             size="small"
@@ -144,6 +146,8 @@ const copiesFreeUnits = computed(() => {
           >
             <template #icon><CloseOutlined /></template>
           </a-button>
+          <!-- строка под единицей, например комментарий к статусу; пустая не занимает места -->
+          <div class="kc__unit-below"><slot name="unit-below" :unit="unit" /></div>
         </li>
       </ul>
 
@@ -206,8 +210,9 @@ const copiesFreeUnits = computed(() => {
 
 .kc__unit {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 0 12px;
   padding: 4px 4px 4px 12px;
   /* фон страницы (bg layout); модал вне каркаса склада, поэтому с запасным значением */
   background: var(--tmc-bg-layout, #f5f5f5);
@@ -237,6 +242,15 @@ const copiesFreeUnits = computed(() => {
 .kc__unit-remove {
   flex: none;
   color: var(--tmc-icon);
+}
+
+.kc__unit-below {
+  flex-basis: 100%;
+  padding: 4px 8px 4px 0;
+}
+
+.kc__unit-below:empty {
+  display: none;
 }
 
 .kc__add-unit {
