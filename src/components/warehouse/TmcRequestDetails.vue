@@ -75,6 +75,10 @@ const columns = computed<TableColumnsType>(() => [
       <h3 class="rd-title">Комментарий к заявке</h3>
       <p class="rd-comment">{{ request.userComment || '—' }}</p>
     </section>
+    <section v-if="request.rejectReason">
+      <h3 class="rd-title">Причина отказа</h3>
+      <p class="rd-comment">{{ request.rejectReason }}</p>
+    </section>
   </div>
 
   <a-table
@@ -102,7 +106,12 @@ const columns = computed<TableColumnsType>(() => [
 
       <a v-else-if="column.key === 'contacts'" :href="`mailto:${request.email}`">{{ request.email }}</a>
 
-      <p v-else-if="column.key === 'comment'" class="rd-comment">{{ request.userComment || '—' }}</p>
+      <template v-else-if="column.key === 'comment'">
+        <p class="rd-comment">{{ request.userComment || '—' }}</p>
+        <p v-if="request.rejectReason" class="rd-comment rd-reject">
+          <span class="rd-reject__label">Причина отказа:</span> {{ request.rejectReason }}
+        </p>
+      </template>
     </template>
   </a-table>
 </template>
@@ -167,5 +176,12 @@ const columns = computed<TableColumnsType>(() => [
   margin: 0;
   padding: 0;
   list-style: none;
+}
+.rd-reject {
+  margin-top: 8px;
+}
+
+.rd-reject__label {
+  color: var(--tmc-text-tertiary, rgba(0, 0, 0, 0.45));
 }
 </style>

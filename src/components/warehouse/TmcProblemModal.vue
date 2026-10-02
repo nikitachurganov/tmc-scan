@@ -89,7 +89,7 @@ async function submit() {
 
 <template>
   <a-modal :open="open" title="Проблема с ТМЦ" destroy-on-close centered @cancel="emit('close')">
-    <p class="pm-hint">ТМЦ с отмеченной проблемой уходит на обслуживание, пока проблему не устранят.</p>
+    <p class="pm-hint">ТМЦ с отмеченной проблемой получит статус «Повреждено» (или «Утеряно»), а в заявку добавится запись об инциденте.</p>
     <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
       <a-form-item label="ТМЦ" name="unitId">
         <a-select

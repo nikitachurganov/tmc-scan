@@ -4,17 +4,20 @@ import { computed } from 'vue'
 const props = defineProps<{ label: string }>()
 
 const colors: Record<string, string> = {
+  // заявки
   Новая: 'blue',
-  'В обработке': 'gold',
+  'На модерации': 'gold',
   Подготовка: 'gold',
-  Готово: 'green',
-  'На руках': 'blue',
-  'Частично выдана': 'orange',
-  Доступен: 'green',
-  Выдан: 'blue',
-  'На обслуживании': 'gold',
-  Возвращена: 'default',
+  'Готово к выдаче': 'green',
+  'В пользовании': 'blue',
+  Возвращено: 'default',
+  Невозвращено: 'red',
   Отклонена: 'red',
+  // ТМЦ («В пользовании» — общий для заявки и ТМЦ)
+  Доступно: 'green',
+  Забронировано: 'gold',
+  Повреждено: 'orange',
+  Утеряно: 'red',
 }
 
 const color = computed(() => colors[props.label] ?? 'default')

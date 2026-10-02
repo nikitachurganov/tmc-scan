@@ -119,7 +119,7 @@ const columns = computed<TableColumnsType>(() => {
     })),
     // в компактной действия закреплены справа: при прокрутке колонок кнопки остаются на виду
     ...(props.actions
-      ? [{ title: '', key: 'actions', width: props.compact ? 160 : 190, fixed: props.compact ? ('right' as const) : undefined }]
+      ? [{ title: '', key: 'actions', width: props.compact ? 160 : 260, fixed: props.compact ? ('right' as const) : undefined, align: props.compact ? undefined : ('right' as const) }]
       : []),
   ]
 })
@@ -142,8 +142,28 @@ function advance(row: Row, successText: string) {
   if (advanceRequestStatus(row.id)) message.success(successText)
 }
 
-function reject(row: Row) {
-  if (rejectRequest(row.id)) message.success(`Заявка ${row.number} отклонена и перенесена в журнал выдачи`)
+/** Отклонение: сначала окно с обязательной причиной отказа */
+const rejectTarget = ref<Row | null>(null)
+const rejectReason = ref('')
+const rejectError = ref(false)
+
+function askReject(row: Row) {
+  rejectTarget.value = row
+  rejectReason.value = ''
+  rejectError.value = false
+}
+
+function confirmReject() {
+  const row = rejectTarget.value
+  if (!row) return
+  if (!rejectReason.value.trim()) {
+    rejectError.value = true
+    return
+  }
+  if (rejectRequest(row.id, rejectReason.value)) {
+    message.success(`Заявка ${row.number} отклонена и перенесена в журнал выдачи`)
+  }
+  rejectTarget.value = null
 }
 
 function startIssue(row: Row) {
@@ -155,7 +175,7 @@ function startReturn(row: Row) {
 }
 
 function isOnHand(status: RequestStatus) {
-  return status === 'На руках' || status === 'Частично выдана'
+  return status === 'В пользовании'
 }
 
 /** Состав заявки для раскрытой строки: единица + комплект по реестру, проблема, «не выдано» */
@@ -204,24 +224,20 @@ function detailItems(request: WarehouseRequest): RequestDetailItem[] {
           v-else-if="column.key === 'actions'"
           :size="4"
           :direction="compact ? 'vertical' : 'horizontal'"
-          :wrap="!compact"
+          :wrap="false"
           :align="compact ? 'start' : undefined"
         >
           <template v-if="(record as Row).status === 'Новая'">
-            <a-button type="link" size="small" @click="advance(record as Row, 'Заявка взята в обработку')">
-              В обработку
+            <a-button type="link" size="small" @click="advance(record as Row, 'Заявка передана на модерацию')">
+              На модерацию
             </a-button>
-            <a-popconfirm title="Отклонить заявку?" ok-text="Отклонить" cancel-text="Отмена" @confirm="reject(record as Row)">
-              <a-button type="link" size="small" danger>Отклонить</a-button>
-            </a-popconfirm>
+            <a-button type="link" size="small" danger @click="askReject(record as Row)">Отклонить</a-button>
           </template>
-          <template v-else-if="(record as Row).status === 'В обработке'">
+          <template v-else-if="(record as Row).status === 'На модерации'">
             <a-button type="link" size="small" @click="advance(record as Row, 'Заявка передана в подготовку')">
               Начать подготовку
             </a-button>
-            <a-popconfirm title="Отклонить заявку?" ok-text="Отклонить" cancel-text="Отмена" @confirm="reject(record as Row)">
-              <a-button type="link" size="small" danger>Отклонить</a-button>
-            </a-popconfirm>
+            <a-button type="link" size="small" danger @click="askReject(record as Row)">Отклонить</a-button>
           </template>
           <a-button
             v-else-if="(record as Row).status === 'Подготовка'"
@@ -231,7 +247,7 @@ function detailItems(request: WarehouseRequest): RequestDetailItem[] {
           >
             Отметить готовой
           </a-button>
-          <a-button v-else-if="(record as Row).status === 'Готово'" type="link" size="small" @click="startIssue(record as Row)">
+          <a-button v-else-if="(record as Row).status === 'Готово к выдаче'" type="link" size="small" @click="startIssue(record as Row)">
             Перейти к выдаче
           </a-button>
           <a-button v-else-if="isOnHand((record as Row).status)" type="link" size="small" @click="startReturn(record as Row)">
@@ -291,21 +307,17 @@ function detailItems(request: WarehouseRequest): RequestDetailItem[] {
       </a-collapse>
       <footer v-if="actions" class="rq-row__actions">
         <template v-if="row.status === 'Новая'">
-          <a-button type="link" size="small" @click="advance(row, 'Заявка взята в обработку')">В обработку</a-button>
-          <a-popconfirm title="Отклонить заявку?" ok-text="Отклонить" cancel-text="Отмена" @confirm="reject(row)">
-            <a-button type="link" size="small" danger>Отклонить</a-button>
-          </a-popconfirm>
+          <a-button type="link" size="small" @click="advance(row, 'Заявка передана на модерацию')">На модерацию</a-button>
+          <a-button type="link" size="small" danger @click="askReject(row)">Отклонить</a-button>
         </template>
-        <template v-else-if="row.status === 'В обработке'">
+        <template v-else-if="row.status === 'На модерации'">
           <a-button type="link" size="small" @click="advance(row, 'Заявка передана в подготовку')">Начать подготовку</a-button>
-          <a-popconfirm title="Отклонить заявку?" ok-text="Отклонить" cancel-text="Отмена" @confirm="reject(row)">
-            <a-button type="link" size="small" danger>Отклонить</a-button>
-          </a-popconfirm>
+          <a-button type="link" size="small" danger @click="askReject(row)">Отклонить</a-button>
         </template>
         <a-button v-else-if="row.status === 'Подготовка'" type="link" size="small" @click="advance(row, 'Заявка готова к выдаче')">
           Отметить готовой
         </a-button>
-        <a-button v-else-if="row.status === 'Готово'" type="link" size="small" @click="startIssue(row)">
+        <a-button v-else-if="row.status === 'Готово к выдаче'" type="link" size="small" @click="startIssue(row)">
           Перейти к выдаче
         </a-button>
         <a-button v-else-if="isOnHand(row.status)" type="link" size="small" @click="startReturn(row)">
@@ -323,6 +335,35 @@ function detailItems(request: WarehouseRequest): RequestDetailItem[] {
       class="rq-pagination"
     />
   </div>
+
+  <a-modal
+    :open="rejectTarget !== null"
+    :title="`Отклонить заявку ${rejectTarget?.number ?? ''}`"
+    centered
+    ok-text="Отклонить"
+    ok-type="danger"
+    cancel-text="Отмена"
+    @ok="confirmReject"
+    @cancel="rejectTarget = null"
+  >
+    <a-form layout="vertical">
+      <a-form-item
+        label="Причина отказа"
+        required
+        :validate-status="rejectError ? 'error' : undefined"
+        :help="rejectError ? 'Укажите причину отказа' : undefined"
+      >
+        <a-textarea
+          v-model:value="rejectReason"
+          :rows="4"
+          :maxlength="500"
+          show-count
+          placeholder="Например, нет в наличии на эти даты"
+          @change="rejectError = false"
+        />
+      </a-form-item>
+    </a-form>
+  </a-modal>
 </template>
 
 <style scoped>

@@ -164,7 +164,6 @@ function onAdhocCreated(units: EquipmentUnit[]) {
       :open="addingAdhoc"
       :categories="categories"
       :default-category="defaultCategory"
-      allow-quantity
       @close="addingAdhoc = false"
       @created="onAdhocCreated"
     />

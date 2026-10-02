@@ -24,7 +24,11 @@ export interface IssueRequest {
   items: TmcItem[]
 }
 
-export type EquipmentStatus = 'available' | 'issued' | 'maintenance'
+/**
+ * Статус единицы оборудования. Основной путь: available → booked → in_use → available.
+ * damaged и lost — исключения: проблема при возврате или единицу не вернули.
+ */
+export type EquipmentStatus = 'available' | 'booked' | 'in_use' | 'damaged' | 'lost'
 
 /**
  * Источник единицы оборудования:
@@ -44,7 +48,7 @@ export const problemTypeLabels: Record<ProblemType, string> = {
   other: 'Другое',
 }
 
-/** Отметка проблемы: единица уходит на обслуживание, пока проблему не устранят */
+/** Отметка проблемы: единица повреждена или утеряна, пока проблему не устранят */
 export interface UnitProblem {
   type: ProblemType
   comment?: string
@@ -178,18 +182,25 @@ export interface RequestComment {
   text: string
 }
 
+/**
+ * Статус заявки: Новая → На модерации → Подготовка → Готово к выдаче → В пользовании → Возвращено.
+ * Невозвращено — ТМЦ так и не вернули; Отклонена — заявку отклонили до выдачи.
+ */
 export type RequestStatus =
   | 'Новая'
-  | 'В обработке'
+  | 'На модерации'
   | 'Подготовка'
-  | 'Готово'
-  | 'На руках'
-  | 'Частично выдана'
-  | 'Возвращена'
+  | 'Готово к выдаче'
+  | 'В пользовании'
+  | 'Возвращено'
+  | 'Невозвращено'
   | 'Отклонена'
 
 /** Статусы, с которыми заявка завершена и уходит из активных в журнал выдачи */
-export const FINISHED_REQUEST_STATUSES: RequestStatus[] = ['Возвращена', 'Отклонена']
+export const FINISHED_REQUEST_STATUSES: RequestStatus[] = ['Возвращено', 'Невозвращено', 'Отклонена']
+
+/** Статусы до выдачи: единицы заявки забронированы */
+export const PRE_ISSUE_REQUEST_STATUSES: RequestStatus[] = ['Новая', 'На модерации', 'Подготовка', 'Готово к выдаче']
 
 /** Заявка/бронь виртуального склада. Список, в котором она показана, определяется статусом */
 export interface WarehouseRequest {
@@ -214,6 +225,8 @@ export interface WarehouseRequest {
   notIssuedIds: number[]
   /** Комментарий пользователя, оставленный при бронировании; склад его не редактирует */
   userComment?: string
+  /** Причина отказа, которую указал склад при отклонении заявки */
+  rejectReason?: string
   /** Обсуждение самой заявки: согласование, договорённости с пользователем */
   requestComments: RequestComment[]
   /** Заметки про состояние/особенности выдаваемого ТМЦ */
@@ -221,9 +234,11 @@ export interface WarehouseRequest {
 }
 
 export const equipmentStatusLabels: Record<EquipmentStatus, string> = {
-  available: 'Доступен',
-  issued: 'Выдан',
-  maintenance: 'На обслуживании',
+  available: 'Доступно',
+  booked: 'Забронировано',
+  in_use: 'В пользовании',
+  damaged: 'Повреждено',
+  lost: 'Утеряно',
 }
 
 export const equipmentOriginLabels: Record<EquipmentOrigin, string> = {
@@ -250,12 +265,14 @@ export interface UsageLogEntry {
   issuedAt: string
   dueAt: string
   returnedAt: string | null
+  /** Единицу не вернули: запись закрыта, но ТМЦ утеряно */
+  lost?: boolean
   place: string
 }
 
 /**
  * Склад и его настройки. Роли — справочные списки сотрудников, права по ним не проверяются.
- * Старший админ закреплён только за одним складом.
+ * Старший администратор закреплён только за одним складом.
  */
 export interface WarehouseSettings {
   id: number
@@ -310,6 +327,8 @@ type RequestSeed = {
   actualEnd?: string
   /** Комментарий пользователя к брони */
   userComment?: string
+  /** Причина отказа для отклонённых заявок */
+  rejectReason?: string
   items: [name: string, category: string][]
   /** [автор, дата, текст] */
   requestComments?: [author: string, createdAt: string, text: string][]
@@ -320,21 +339,21 @@ const requestSeeds: RequestSeed[] = [
   // Новые заявки (12)
   { id: 12, status: 'Новая', fullName: 'Петрова Анна Сергеевна', email: 'petrova.as@dvfu.ru', returnUntil: '10.10.2026', userComment: 'Нужен для курсовой, желательно с зарядкой и мышкой.', items: [['Ноутбук', CAT_ELECTRONICS]] },
   { id: 11, status: 'Новая', fullName: 'Смирнова Елена Владимировна', email: 'smirnova.ev@dvfu.ru', returnUntil: '09.10.2026', userComment: 'Для презентации на семинаре в корпусе D.', items: [['Проектор', CAT_ELECTRONICS]] },
-  { id: 10, status: 'В обработке', fullName: 'Кузнецов Максим Игоревич', email: 'kuznetsov.mi@dvfu.ru', returnUntil: '12.10.2026', userComment: 'Собрать шкаф в комнате 512.', items: [['Набор инструментов', CAT_TOOLS]] },
+  { id: 10, status: 'На модерации', fullName: 'Кузнецов Максим Игоревич', email: 'kuznetsov.mi@dvfu.ru', returnUntil: '12.10.2026', userComment: 'Собрать шкаф в комнате 512.', items: [['Набор инструментов', CAT_TOOLS]] },
   { id: 9, status: 'Новая', fullName: 'Иванова Дарья Дмитриевна', email: 'ivanova.dd@dvfu.ru', returnUntil: '08.10.2026', items: [['Удлинитель', CAT_ELECTRIC]] },
-  { id: 8, status: 'В обработке', fullName: 'Волков Роман Сергеевич', email: 'volkov.rs@dvfu.ru', returnUntil: '11.10.2026', items: [['Пылесос', CAT_HOUSEHOLD]] },
+  { id: 8, status: 'На модерации', fullName: 'Волков Роман Сергеевич', email: 'volkov.rs@dvfu.ru', returnUntil: '11.10.2026', items: [['Пылесос', CAT_HOUSEHOLD]] },
   { id: 13, status: 'Новая', fullName: 'Захарова Полина Андреевна', email: 'zakharova.pa@dvfu.ru', returnUntil: '13.10.2026', items: [['Утюг', CAT_HOUSEHOLD]] },
   { id: 14, status: 'Новая', fullName: 'Лебедев Артём Олегович', email: 'lebedev.ao@dvfu.ru', returnUntil: '14.10.2026', items: [['HDMI-кабель', CAT_ELECTRONICS]] },
-  { id: 15, status: 'В обработке', fullName: 'Ефимова Ксения Павловна', email: 'efimova.kp@dvfu.ru', returnUntil: '15.10.2026', items: [['Штатив', CAT_MEDIA]] },
+  { id: 15, status: 'На модерации', fullName: 'Ефимова Ксения Павловна', email: 'efimova.kp@dvfu.ru', returnUntil: '15.10.2026', items: [['Штатив', CAT_MEDIA]] },
   { id: 16, status: 'Новая', fullName: 'Мельников Глеб Ильич', email: 'melnikov.gi@dvfu.ru', returnUntil: '16.10.2026', items: [['Дрель', CAT_TOOLS]] },
   { id: 17, status: 'Новая', fullName: 'Абрамова Вера Николаевна', email: 'abramova.vn@dvfu.ru', returnUntil: '17.10.2026', items: [['Фен', CAT_HOUSEHOLD]] },
-  { id: 18, status: 'В обработке', fullName: 'Соколов Тимур Ринатович', email: 'sokolov.tr@dvfu.ru', returnUntil: '18.10.2026', items: [['Микрофон', CAT_MEDIA]] },
+  { id: 18, status: 'На модерации', fullName: 'Соколов Тимур Ринатович', email: 'sokolov.tr@dvfu.ru', returnUntil: '18.10.2026', items: [['Микрофон', CAT_MEDIA]] },
   { id: 19, status: 'Новая', fullName: 'Гусева Алина Романовна', email: 'guseva.ar@dvfu.ru', returnUntil: '19.10.2026', items: [['Планшет', CAT_ELECTRONICS]] },
 
   // К выдаче сегодня (8)
   {
     id: 7,
-    status: 'Готово',
+    status: 'Готово к выдаче',
     fullName: 'Сидоров Константин Александрович',
     email: 'sidorov.ka@dvfu.ru',
     time: '11:00',
@@ -348,39 +367,40 @@ const requestSeeds: RequestSeed[] = [
       ['Николаева Мария Викторовна', '04.10.2026', 'На фотоаппарате поцарапан бленда, но объектив исправен. Предупредить при выдаче.'],
     ],
   },
-  { id: 6, status: 'Готово', fullName: 'Морозова Анастасия Викторовна', email: 'morozova.av@dvfu.ru', time: '12:30', returnUntil: '06.10.2026', userComment: 'Запись подкаста, микрофон нужен с ветрозащитой.', items: [['Штатив', CAT_MEDIA], ['Удлинитель', CAT_ELECTRIC], ['Микрофон', CAT_MEDIA]] },
+  { id: 6, status: 'Готово к выдаче', fullName: 'Морозова Анастасия Викторовна', email: 'morozova.av@dvfu.ru', time: '12:30', returnUntil: '06.10.2026', userComment: 'Запись подкаста, микрофон нужен с ветрозащитой.', items: [['Штатив', CAT_MEDIA], ['Удлинитель', CAT_ELECTRIC], ['Микрофон', CAT_MEDIA]] },
   { id: 3, status: 'Подготовка', fullName: 'Козлов Иван Петрович', email: 'kozlov.ip@dvfu.ru', time: '14:00', returnUntil: '07.10.2026', items: [['Проектор', CAT_ELECTRONICS]] },
   { id: 1, status: 'Подготовка', fullName: 'Новикова Екатерина Сергеевна', email: 'novikova.es@dvfu.ru', time: '16:00', returnUntil: '08.10.2026', items: [['Ноутбук', CAT_ELECTRONICS]] },
-  { id: 20, status: 'Готово', fullName: 'Романов Дмитрий Алексеевич', email: 'romanov.da@dvfu.ru', time: '17:00', returnUntil: '09.10.2026', items: [['Дрель', CAT_TOOLS], ['Набор инструментов', CAT_TOOLS]] },
+  { id: 20, status: 'Готово к выдаче', fullName: 'Романов Дмитрий Алексеевич', email: 'romanov.da@dvfu.ru', time: '17:00', returnUntil: '09.10.2026', items: [['Дрель', CAT_TOOLS], ['Набор инструментов', CAT_TOOLS]] },
   { id: 21, status: 'Подготовка', fullName: 'Федорова Мария Игоревна', email: 'fedorova.mi@dvfu.ru', time: '17:30', returnUntil: '10.10.2026', items: [['Утюг', CAT_HOUSEHOLD]] },
-  { id: 22, status: 'Готово', fullName: 'Ким Даниил Сергеевич', email: 'kim.ds@dvfu.ru', time: '18:00', returnUntil: '11.10.2026', items: [['Планшет', CAT_ELECTRONICS]] },
+  { id: 22, status: 'Готово к выдаче', fullName: 'Ким Даниил Сергеевич', email: 'kim.ds@dvfu.ru', time: '18:00', returnUntil: '11.10.2026', items: [['Планшет', CAT_ELECTRONICS]] },
   { id: 23, status: 'Подготовка', fullName: 'Орлов Никита Владимирович', email: 'orlov.nv@dvfu.ru', time: '18:30', returnUntil: '12.10.2026', items: [['Пылесос', CAT_HOUSEHOLD]] },
 
   // Активные аренды (5)
   {
     id: 5,
-    status: 'На руках',
+    status: 'В пользовании',
     fullName: 'Алексеев Дмитрий Викторович',
     email: 'alekseev.dv@dvfu.ru',
     returnUntil: '27.04.2024',
     // выдали позже плана — факт начала подсвечивается
     actualStart: '24.04.2024 11:20',
     userComment: 'Снимаю видеоролик для конкурса факультета.',
-    items: [['Видеокамера', CAT_MEDIA]],
+    items: [['Видеокамера', CAT_MEDIA], ['Штатив', CAT_MEDIA]],
     itemComments: [
       ['Петров Андрей Сергеевич', '20.04.2024', 'Аккумулятор держит около часа, лучше выдавать с зарядкой.'],
     ],
   },
-  { id: 4, status: 'На руках', fullName: 'Орлова Марина Сергеевна', email: 'orlova.ms@dvfu.ru', returnUntil: '26.04.2024', items: [['Набор инструментов', CAT_TOOLS]] },
-  { id: 2, status: 'На руках', fullName: 'Белов Николай Андреевич', email: 'belov.na@dvfu.ru', returnUntil: '25.04.2024', items: [['Пылесос', CAT_HOUSEHOLD]] },
-  { id: 24, status: 'На руках', fullName: 'Титова Ольга Юрьевна', email: 'titova.oy@dvfu.ru', returnUntil: '24.04.2024', items: [['Фен', CAT_HOUSEHOLD]] },
-  { id: 25, status: 'На руках', fullName: 'Зайцев Павел Денисович', email: 'zaytsev.pd@dvfu.ru', returnUntil: '23.04.2024', items: [['Проектор', CAT_ELECTRONICS]] },
+  { id: 4, status: 'В пользовании', fullName: 'Орлова Марина Сергеевна', email: 'orlova.ms@dvfu.ru', returnUntil: '26.04.2024', items: [['Набор инструментов', CAT_TOOLS]] },
+  { id: 2, status: 'В пользовании', fullName: 'Белов Николай Андреевич', email: 'belov.na@dvfu.ru', returnUntil: '25.04.2024', items: [['Пылесос', CAT_HOUSEHOLD]] },
+  { id: 24, status: 'В пользовании', fullName: 'Титова Ольга Юрьевна', email: 'titova.oy@dvfu.ru', returnUntil: '24.04.2024', items: [['Фен', CAT_HOUSEHOLD]] },
+  { id: 25, status: 'В пользовании', fullName: 'Зайцев Павел Денисович', email: 'zaytsev.pd@dvfu.ru', returnUntil: '23.04.2024', items: [['Проектор', CAT_ELECTRONICS]] },
 
-  // Возвращена / отклонена — для реестра заявок
+  // Возвращено / невозвращено / отклонена — для реестра заявок
   // вернули на два дня позже срока — факт окончания подсвечивается
-  { id: 26, status: 'Возвращена', fullName: 'Гончарова Инна Витальевна', email: 'goncharova.iv@dvfu.ru', returnUntil: '20.09.2026', actualStart: '17.09.2026 09:50', actualEnd: '22.09.2026 12:00', items: [['Пылесос', CAT_HOUSEHOLD]] },
-  { id: 28, status: 'Возвращена', fullName: 'Павлова Софья Андреевна', email: 'pavlova.sa@dvfu.ru', returnUntil: '25.09.2026', actualStart: '22.09.2026 10:00', actualEnd: '25.09.2026 16:40', items: [['Проектор', CAT_ELECTRONICS], ['HDMI-кабель', CAT_ELECTRONICS]] },
-  { id: 27, status: 'Отклонена', fullName: 'Тарасов Егор Максимович', email: 'tarasov.em@dvfu.ru', returnUntil: '21.09.2026', items: [['Ноутбук', CAT_ELECTRONICS]] },
+  { id: 26, status: 'Возвращено', fullName: 'Гончарова Инна Витальевна', email: 'goncharova.iv@dvfu.ru', returnUntil: '20.09.2026', actualStart: '17.09.2026 09:50', actualEnd: '22.09.2026 12:00', items: [['Пылесос', CAT_HOUSEHOLD]] },
+  { id: 28, status: 'Возвращено', fullName: 'Павлова Софья Андреевна', email: 'pavlova.sa@dvfu.ru', returnUntil: '25.09.2026', actualStart: '22.09.2026 10:00', actualEnd: '25.09.2026 16:40', items: [['Проектор', CAT_ELECTRONICS], ['HDMI-кабель', CAT_ELECTRONICS]] },
+  { id: 29, status: 'Невозвращено', fullName: 'Крылов Станислав Андреевич', email: 'krylov.sa@dvfu.ru', returnUntil: '24.09.2026', actualStart: '21.09.2026 10:00', userComment: 'Нужен на выходные для съёмок.', items: [['Фотоаппарат', CAT_MEDIA]], requestComments: [['Николаева Мария Викторовна', '27.09.2026', 'Пользователь не пришёл на возврат и не отвечает, ТМЦ отмечено как утерянное.']] },
+  { id: 27, status: 'Отклонена', fullName: 'Тарасов Егор Максимович', email: 'tarasov.em@dvfu.ru', returnUntil: '21.09.2026', rejectReason: 'Ноутбуки на эти даты уже забронированы другими заявками.', items: [['Ноутбук', CAT_ELECTRONICS]] },
 ]
 
 /** Всего доступных ТМЦ на складе в начале сессии — число из макета */
@@ -545,7 +565,7 @@ function buildKits(items: EquipmentUnit[], reservedIds: Set<number>): TmcKit[] {
   }))
 }
 
-/** История выдач: несколько текущих (по «На руках» заявкам) и завершённых записей для примера */
+/** История выдач: несколько текущих (по заявкам «В пользовании») и завершённых записей для примера */
 function buildLog(items: EquipmentUnit[], requests: WarehouseRequest[], kits: TmcKit[]): UsageLogEntry[] {
   const kitByUnit = new Map<number, TmcKit>()
   for (const kit of kits) {
@@ -575,7 +595,8 @@ function buildLog(items: EquipmentUnit[], requests: WarehouseRequest[], kits: Tm
         userEmail: request.email,
         issuedAt: datePart(request.pickupActualAt),
         dueAt: request.returnUntil,
-        returnedAt: request.returnActualAt ? datePart(request.returnActualAt) : null,
+        returnedAt: request.returnActualAt ? datePart(request.returnActualAt) : unit.status === 'lost' ? request.returnUntil : null,
+        lost: unit.status === 'lost' ? true : undefined,
         place: request.place,
       })
     }
@@ -619,8 +640,8 @@ export interface CampusBuilding {
 }
 
 export const campusBuildings: CampusBuilding[] = [
-  { name: 'Общежитие №7', rooms: ['Комната выдачи 101', 'Вахта, 1 этаж', 'Кладовая, цокольный этаж'] },
-  { name: 'Общежитие №10', rooms: ['Комната выдачи 12', 'Вахта, 1 этаж'] },
+  { name: 'Общежитие №7', rooms: ['101', 'Вахта, 1 этаж', 'Кладовая, цокольный этаж'] },
+  { name: 'Общежитие №10', rooms: ['12', 'Вахта, 1 этаж'] },
   { name: 'Корпус A', rooms: ['Пункт выдачи, 2 этаж', 'A-310'] },
   { name: 'Корпус B', rooms: ['Кафедра, B-205', 'B-112'] },
   { name: 'Корпус D', rooms: ['Абонемент, 1 этаж', 'D-412', 'D-735'] },
@@ -642,7 +663,7 @@ export const warehouseSettingsList: WarehouseSettings[] = [
     seniorAdminIds: [3],
     moderatorIds: [5],
     pickupBuilding: 'Общежитие №7',
-    pickupRoom: 'Комната выдачи 101',
+    pickupRoom: '101',
     phone: '+7 (423) 265-24-29',
     email: 'sklad-obsh7@dvfu.ru',
     channels: [
@@ -657,7 +678,7 @@ export const warehouseSettingsList: WarehouseSettings[] = [
     seniorAdminIds: [1],
     moderatorIds: [2],
     pickupBuilding: 'Общежитие №10',
-    pickupRoom: 'Комната выдачи 12',
+    pickupRoom: '12',
     phone: '+7 (423) 265-24-31',
     email: 'sklad-obsh10@dvfu.ru',
     channels: [{ id: 1, title: 'Чат склада', url: 'https://t.me/dvfu_obsh10_sklad' }],
@@ -691,7 +712,14 @@ function buildWarehouseData() {
   const items: EquipmentUnit[] = []
   const today = formatRuDate(new Date())
   const requests: WarehouseRequest[] = requestSeeds.map((seed) => {
-    const itemStatus: EquipmentStatus = seed.status === 'На руках' ? 'issued' : 'available'
+    const itemStatus: EquipmentStatus =
+      seed.status === 'В пользовании'
+        ? 'in_use'
+        : seed.status === 'Невозвращено'
+          ? 'lost'
+          : PRE_ISSUE_REQUEST_STATUSES.includes(seed.status)
+            ? 'booked'
+            : 'available'
     const itemIds = seed.items.map(([name, category]) => {
       const item = makeItem(name, category, itemStatus, adhocUnitNames.has(name) ? 'adhoc' : 'asset')
       items.push(item)
@@ -700,7 +728,7 @@ function buildWarehouseData() {
     // к выдаче сегодня — план на сегодняшнее время, остальные — за три дня до срока возврата
     const pickupPlannedAt =
       seed.plannedStart ?? (seed.time ? `${today} ${seed.time}` : addDaysRu(seed.returnUntil, -3, '10:00'))
-    const issued = seed.status === 'На руках' || seed.status === 'Возвращена'
+    const issued = ['В пользовании', 'Возвращено', 'Невозвращено'].includes(seed.status)
     return {
       id: seed.id,
       number: `ZK-2024-${String(seed.id).padStart(4, '0')}`,
@@ -711,23 +739,29 @@ function buildWarehouseData() {
       pickupPlannedAt,
       pickupActualAt: seed.actualStart ?? (issued ? pickupPlannedAt : null),
       returnUntil: seed.returnUntil,
-      returnActualAt: seed.actualEnd ?? (seed.status === 'Возвращена' ? `${seed.returnUntil} 12:00` : null),
+      returnActualAt: seed.actualEnd ?? (seed.status === 'Возвращено' ? `${seed.returnUntil} 12:00` : null),
       place: warehousePlace,
       itemIds,
       notIssuedIds: [],
       userComment: seed.userComment,
+      rejectReason: seed.rejectReason,
       requestComments: buildComments(seed.requestComments),
       itemComments: buildComments(seed.itemComments),
     }
   })
+
+  // не вернули — единица утеряна, причина в карточке оборудования
+  for (const item of items.filter((i) => i.status === 'lost')) {
+    item.problem = { type: 'lost', comment: 'Не вернули после аренды', reportedAt: today, reportedBy: 'Николаева Мария Викторовна' }
+  }
 
   const availableNow = items.filter((i) => i.status === 'available').length
   for (let n = 0; n < AVAILABLE_TOTAL - availableNow; n += 1) {
     const [name, category] = fillerCatalog[n % fillerCatalog.length]!
     items.push(makeItem(name, category, 'available', adhocUnitNames.has(name) ? 'adhoc' : 'asset'))
   }
-  items.push(makeItem('Проектор', CAT_ELECTRONICS, 'maintenance'))
-  items.push(makeItem('Дрель', CAT_TOOLS, 'maintenance'))
+  items.push(makeItem('Проектор', CAT_ELECTRONICS, 'damaged'))
+  items.push(makeItem('Дрель', CAT_TOOLS, 'damaged'))
   // запас утюгов для пула — часть без учёта в реестре ОС
   for (let n = 0; n < 4; n += 1) items.push(makeItem('Утюг', CAT_HOUSEHOLD, 'available', 'adhoc'))
 

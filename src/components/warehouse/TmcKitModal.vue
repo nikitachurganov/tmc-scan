@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { DeleteOutlined, ScanOutlined, UploadOutlined } from '@ant-design/icons-vue'
-import { message, type FormInstance } from 'ant-design-vue'
+import { message, Modal, type FormInstance } from 'ant-design-vue'
 import type { Rule } from 'ant-design-vue/es/form'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import TmcAddAdhocEquipment from './TmcAddAdhocEquipment.vue'
 import TmcDurationInput from './TmcDurationInput.vue'
 import TmcEquipmentScanner from './TmcEquipmentScanner.vue'
+import TmcOverlayScroll from './TmcOverlayScroll.vue'
 import TmcKitComposition from './TmcKitComposition.vue'
 import type { ScanResult } from './scan'
+import { useCurrentWarehouse } from '@/composables/useCurrentWarehouse'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useWarehouse, type KitInput } from '@/composables/useWarehouse'
 import type { Employee, EquipmentUnit, TmcKit, TmcType } from '@/mocks/tmc'
@@ -31,7 +33,8 @@ const { equipment, templates, unitById } = useWarehouse()
 const modalBodyStyle = computed(() =>
   isMobile.value
     ? { maxHeight: 'calc(100vh - 128px)', overflowY: 'auto' as const }
-    : { maxHeight: '70vh', overflowY: 'auto' as const },
+    : // ПК: тело окна не прокручивается, каждая колонка скроллится сама (см. .km-col)
+      { height: '70vh', overflow: 'hidden' as const },
 )
 
 interface FormState {
@@ -98,17 +101,36 @@ const addingAdhocUnit = ref(false)
 
 const isEdit = computed(() => props.kit !== null)
 const categoryOptions = computed(() => props.categories.map((value) => ({ value })))
-const employeeOptions = computed(() => props.employees.map((e) => ({ value: e.id, label: e.name })))
+/** Ответственным можно выбрать управляющего или старшего администратора текущего склада */
+const { current: currentWarehouse } = useCurrentWarehouse()
+
+const responsibleOptions = computed(() => {
+  const warehouse = currentWarehouse.value
+  const nameOf = (id: number) => props.employees.find((e) => e.id === id)?.name ?? '—'
+  const managers = warehouse?.managerIds ?? []
+  // сотрудник с обеими ролями показан один раз — среди управляющих
+  const seniors = (warehouse?.seniorAdminIds ?? []).filter((id) => !managers.includes(id))
+  const groups = [
+    { label: 'Управляющие', options: managers.map((id) => ({ value: id, label: nameOf(id) })) },
+    { label: 'Старшие администраторы', options: seniors.map((id) => ({ value: id, label: nameOf(id) })) },
+  ].filter((group) => group.options.length)
+  // ответственный, сохранённый раньше и уже не входящий в роли склада, остаётся в списке
+  const saved = props.kit?.responsibleId
+  const listed = [...managers, ...seniors]
+  if (saved !== undefined && !listed.includes(saved)) {
+    groups.push({ label: 'Назначен ранее', options: [{ value: saved, label: nameOf(saved) }] })
+  }
+  return groups
+})
 const unitOptions = computed(() =>
-  props.availableUnits.map((u) => ({ value: u.id, label: `${u.name} · ${u.code}` })),
+  // label — для поиска и выбранного значения, name и code — для двух строк в выпадающем списке
+  props.availableUnits.map((u) => ({ value: u.id, label: `${u.name} · ${u.code}`, name: u.name, code: u.code })),
 )
 
 const rules: Record<string, Rule[]> = {
   name: [{ required: true, whitespace: true, message: 'Укажите наименование', trigger: 'blur' }],
   category: [{ required: true, message: 'Выберите категорию', trigger: 'change' }],
-  responsibleId: [
-    { required: true, type: 'number', message: 'Выберите ответственного', trigger: 'change' },
-  ],
+  responsibleId: [{ required: true, type: 'number', message: 'Выберите ответственного', trigger: 'change' }],
 }
 
 watch(
@@ -134,9 +156,47 @@ watch(
     scanning.value = false
     unitSearch.value = ''
     formRef.value?.clearValidate()
+    initialState = formState()
   },
 )
 
+/**
+ * Снимок заполненных полей: пустые группы не считаем — в режиме комплекта и экземпляров форма
+ * сама заводит одну пустую группу, а это ещё не ввод пользователя.
+ */
+function formState(): string {
+  return JSON.stringify({
+    type: form.type,
+    multiple: form.multiple,
+    unitId: form.unitId,
+    name: form.name,
+    category: form.category,
+    description: form.description,
+    usageRules: form.usageRules,
+    responsibleId: form.responsibleId,
+    image: form.image,
+    groups: form.groups.filter((g) => g.name.trim() || g.unitIds.length).map((g) => [g.name, g.unitIds]),
+    minRental: form.minRental,
+    maxRental: form.maxRental,
+  })
+}
+
+let initialState = ''
+
+/** Закрытие окна: если в форме есть несохранённые изменения, сначала спрашиваем */
+function requestClose() {
+  if (formState() === initialState) {
+    emit('close')
+    return
+  }
+  Modal.confirm({
+    title: 'Закрыть без сохранения?',
+    okText: 'Закрыть',
+    cancelText: 'Продолжить',
+    centered: true,
+    onOk: () => emit('close'),
+  })
+}
 watch(
   () => [form.groups, form.type, form.multiple, form.unitId],
   () => {
@@ -302,11 +362,12 @@ async function submit() {
     :wrap-class-name="isMobile ? 'km km-mobile' : 'km'"
     destroy-on-close
     :body-style="modalBodyStyle"
-    @cancel="emit('close')"
+    @cancel="requestClose"
   >
     <div class="km-columns">
       <section class="km-col">
         <h3 class="km-col__title">Основная информация</h3>
+        <TmcOverlayScroll class="km-col__scroll">
         <a-form ref="formRef" :model="form" :rules="rules" layout="vertical" @finish="submit">
           <a-form-item label="Наименование ТМЦ" name="name">
             <a-input v-model:value="form.name" placeholder="Например, Набор для презентаций" />
@@ -351,7 +412,7 @@ async function submit() {
               v-model:value="form.responsibleId"
               allow-clear
               placeholder="Выберите ответственного"
-              :options="employeeOptions"
+              :options="responsibleOptions"
             />
           </a-form-item>
           <a-form-item
@@ -401,6 +462,7 @@ async function submit() {
             </div>
           </a-form-item>
         </a-form>
+        </TmcOverlayScroll>
       </section>
 
       <a-divider type="vertical" class="km-divider" />
@@ -408,6 +470,7 @@ async function submit() {
       <section class="km-col">
         <!-- тип определяет, что ниже: оборудование, экземпляры или состав комплекта; правил нет — отдельная форма для подписи -->
         <h3 class="km-col__title">{{ form.type === 'kit' ? 'Состав комплекта' : 'Оборудование' }}</h3>
+        <TmcOverlayScroll class="km-col__scroll">
         <a-form layout="vertical">
           <a-form-item label="Тип">
             <a-radio-group v-model:value="form.type" button-style="solid" class="km-type">
@@ -442,12 +505,18 @@ async function submit() {
               option-filter-prop="label"
               placeholder="Найдите по названию или коду"
               :options="unitOptions"
+              :list-item-height="52"
+              dropdown-class-name="km-unit-dropdown"
               :status="groupsError ? 'error' : undefined"
               class="km-unit"
               @change="() => onUnitChange()"
               @search="unitSearch = $event"
               @input-key-down="onUnitKeydown"
             >
+              <template #option="{ name, code }">
+                <div class="km-unit-option__name">{{ name }}</div>
+                <div class="km-unit-option__code">{{ code }}</div>
+              </template>
               <template #notFoundContent>Нет свободного оборудования</template>
             </a-select>
             <a-button @click="scanning = true">
@@ -473,12 +542,13 @@ async function submit() {
             @created="onAdhocUnitCreated"
           />
         </template>
+        </TmcOverlayScroll>
       </section>
     </div>
 
     <template #footer>
       <div class="km-footer">
-        <a-button :block="isMobile" @click="emit('close')">Отмена</a-button>
+        <a-button :block="isMobile" @click="requestClose">Отмена</a-button>
         <a-button type="primary" :block="isMobile" @click="submit">
           {{ isEdit ? 'Сохранить' : 'Создать ТМЦ' }}
         </a-button>
@@ -492,11 +562,27 @@ async function submit() {
   display: flex;
   align-items: stretch;
   gap: 16px;
+  height: 100%;
 }
 
+/* левая и правая части прокручиваются независимо друг от друга */
 .km-col {
+  display: flex;
   flex: 1;
+  flex-direction: column;
   min-width: 0;
+  height: 100%;
+}
+
+/* заголовок колонки зафиксирован, прокручивается только содержимое под ним */
+.km-col__scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+/* полоса прокрутки занимает свою дорожку справа и не заходит на поля и подписи */
+.km-col__scroll :deep(.os__viewport > div) {
+  padding-right: 14px;
 }
 
 /* второй уровень: подзаголовки колонок ниже заголовка окна */
@@ -629,6 +715,20 @@ async function submit() {
     display: none;
   }
 
+  /* на телефоне колонки друг под другом, прокручивается всё окно целиком */
+  .km-columns,
+  .km-col {
+    height: auto;
+  }
+
+  .km-col__scroll {
+    flex: none;
+  }
+
+  .km-col__scroll :deep(.os__viewport > div) {
+    padding-right: 0;
+  }
+
   .km-image {
     flex-direction: column;
   }
@@ -645,6 +745,23 @@ async function submit() {
 </style>
 
 <style>
+/* выбор оборудования: название и код на разных строках (выпадающий список вне scoped-области) */
+.km-unit-dropdown .ant-select-item-option-content {
+  white-space: normal;
+}
+
+.km-unit-option__name {
+  line-height: 22px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.km-unit-option__code {
+  font-size: 13px;
+  line-height: 18px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
 /* первый уровень заголовков: название окна крупнее подзаголовков колонок (16px) */
 .km .ant-modal-title {
   font-size: 20px;

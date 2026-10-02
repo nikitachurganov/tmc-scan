@@ -32,8 +32,8 @@ export type EmployeeRole = 'manager' | 'seniorAdmin' | 'moderator'
 
 export const employeeRoleLabels: Record<EmployeeRole, string> = {
   manager: 'Управляющий',
-  seniorAdmin: 'Старший админ',
-  moderator: 'Модератор',
+  seniorAdmin: 'Старший администратор',
+  moderator: 'Администратор',
 }
 
 /** Роли сотрудника на складе (справочно: права по ним не проверяются) */

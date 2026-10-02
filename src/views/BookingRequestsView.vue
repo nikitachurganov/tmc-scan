@@ -17,19 +17,12 @@ const { requests } = useWarehouse()
 
 /** Быстрые группы статусов — те же, что на карточках-метриках обзора */
 const STATUS_GROUPS: Record<string, RequestStatus[]> = {
-  new: ['Новая', 'В обработке'],
-  pickup: ['Подготовка', 'Готово'],
-  rental: ['На руках', 'Частично выдана'],
+  new: ['Новая', 'На модерации'],
+  pickup: ['Подготовка', 'Готово к выдаче'],
+  rental: ['В пользовании'],
 }
 
-const ACTIVE_STATUSES: RequestStatus[] = [
-  'Новая',
-  'В обработке',
-  'Подготовка',
-  'Готово',
-  'На руках',
-  'Частично выдана',
-]
+const ACTIVE_STATUSES: RequestStatus[] = ['Новая', 'На модерации', 'Подготовка', 'Готово к выдаче', 'В пользовании']
 
 const tab = computed(() => props.tab)
 const title = computed(() => (tab.value === 'active' ? 'Активные заявки' : 'Журнал выдачи'))

@@ -6,7 +6,7 @@ import { RouterLink } from 'vue-router'
 import TmcDesktopLayout from '@/components/warehouse/TmcDesktopLayout.vue'
 import TmcStatusTag from '@/components/warehouse/TmcStatusTag.vue'
 import { useWarehouse } from '@/composables/useWarehouse'
-import { equipmentOriginLabels, equipmentStatusLabels, problemTypeLabels } from '@/mocks/tmc'
+import { equipmentOriginLabels, equipmentStatusLabels, problemTypeLabels, type UsageLogEntry } from '@/mocks/tmc'
 import { downloadCsv } from '@/utils/csv'
 
 const props = defineProps<{ id: string }>()
@@ -30,8 +30,9 @@ const logColumns: TableColumnsType = [
   { title: 'Статус', key: 'status', width: 130 },
 ]
 
-function rowStatus(returnedAt: string | null): string {
-  return returnedAt ? 'Возвращена' : 'На руках'
+function rowStatus(entry: UsageLogEntry): string {
+  if (entry.lost) return 'Утеряно'
+  return entry.returnedAt ? 'Возвращено' : 'В пользовании'
 }
 
 function exportLog() {
@@ -93,7 +94,7 @@ function exportLog() {
           <h2 class="ev-problem__title">Проблема: {{ problemTypeLabels[unit.problem.type] }}</h2>
           <a-popconfirm
             title="Проблема устранена?"
-            description="Оборудование снимется с обслуживания."
+            description="Проблема будет снята, оборудование вернётся в оборот."
             ok-text="Да, устранена"
             cancel-text="Отмена"
             @confirm="resolve"
@@ -123,7 +124,7 @@ function exportLog() {
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'returnedAt'">{{ record.returnedAt ?? '—' }}</template>
-            <TmcStatusTag v-else-if="column.key === 'status'" :label="rowStatus(record.returnedAt)" />
+            <TmcStatusTag v-else-if="column.key === 'status'" :label="rowStatus(record as UsageLogEntry)" />
           </template>
           <template #emptyText>У этой единицы ещё не было выдач</template>
         </a-table>

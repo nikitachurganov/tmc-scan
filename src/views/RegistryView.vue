@@ -25,7 +25,6 @@ const {
   availableUnitsFor,
   kitStatus,
   kitUnitCount,
-  kitAvailableQuantity,
   employeeName,
   removeKitBlockReason,
   addKit,
@@ -82,10 +81,9 @@ const columns: TableColumnsType = [
   { title: '', key: 'actions', width: 180 },
 ]
 
-/** «5 ед.», а для одной единицы в нескольких экземплярах — «3 из 6 доступно» */
+/** «5 ед.» — сколько единиц в составе, для нескольких экземпляров тоже просто количество */
 function compositionLabel(kit: TmcKit): string {
-  if (!kit.multiple) return `${kitUnitCount(kit)} ед.`
-  return `${kitAvailableQuantity(kit)} из ${kitUnitCount(kit)} доступно`
+  return `${kitUnitCount(kit)} ед.`
 }
 
 /** Единицы группы с кодами — для ссылок на оборудование */
@@ -232,16 +230,15 @@ function remove(kit: TmcKit) {
             <a-popconfirm
               v-else
               title="Удалить ТМЦ?"
+              placement="topRight"
               description="Комплект будет удалён, его оборудование освободится."
               ok-text="Удалить"
               cancel-text="Отмена"
               @confirm="remove(record as TmcKit)"
             >
-              <a-tooltip title="Удалить">
-                <a-button type="text" size="small" danger aria-label="Удалить ТМЦ">
+              <a-button type="text" size="small" danger aria-label="Удалить ТМЦ">
                   <template #icon><DeleteOutlined /></template>
                 </a-button>
-              </a-tooltip>
             </a-popconfirm>
           </a-space>
         </template>
@@ -307,6 +304,7 @@ function remove(kit: TmcKit) {
           </a-tooltip>
           <a-popconfirm
             v-else
+            placement="topRight"
             title="Удалить ТМЦ?"
             description="Комплект будет удалён, его оборудование освободится."
             ok-text="Удалить"

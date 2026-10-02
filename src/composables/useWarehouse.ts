@@ -42,13 +42,13 @@ export type TemplateInput = Omit<UsageRuleTemplate, 'id'>
 const state = reactive(createWarehouseData())
 
 const newRequests = computed(() =>
-  state.requests.filter((r) => r.status === 'Новая' || r.status === 'В обработке'),
+  state.requests.filter((r) => r.status === 'Новая' || r.status === 'На модерации'),
 )
 const pickupRequests = computed(() =>
-  state.requests.filter((r) => r.status === 'Подготовка' || r.status === 'Готово'),
+  state.requests.filter((r) => r.status === 'Подготовка' || r.status === 'Готово к выдаче'),
 )
 /** Статусы, в которых ТМЦ заявки у пользователя: отсюда заявку закрывают возвратом */
-const ON_HAND_STATUSES: RequestStatus[] = ['На руках', 'Частично выдана']
+const ON_HAND_STATUSES: RequestStatus[] = ['В пользовании']
 
 const rentalRequests = computed(() => state.requests.filter((r) => ON_HAND_STATUSES.includes(r.status)))
 
@@ -95,11 +95,12 @@ function availableUnitsFor(kitId?: number): EquipmentUnit[] {
   )
 }
 
-/** Статус набора единиц: обслуживание важнее выдачи, иначе доступен */
+/** Статус набора единиц: повреждение и утеря важнее пользования, пользование — брони, иначе доступно */
 function unitsStatus(unitIds: number[]): EquipmentStatus {
   const statuses = unitIds.map((id) => unitById(id)?.status)
-  if (statuses.includes('maintenance')) return 'maintenance'
-  if (statuses.includes('issued')) return 'issued'
+  for (const status of ['damaged', 'lost', 'in_use', 'booked'] as const) {
+    if (statuses.includes(status)) return status
+  }
   return 'available'
 }
 
@@ -131,8 +132,8 @@ function employeeName(id: number): string {
 function removeKitBlockReason(id: number): string | null {
   const kit = state.kits.find((k) => k.id === id)
   if (!kit) return 'ТМЦ не найден'
-  if (kitUnitIds(kit).some((unitId) => unitById(unitId)?.status === 'issued')) {
-    return 'В комплекте есть выданное оборудование'
+  if (kitUnitIds(kit).some((unitId) => unitById(unitId)?.status === 'in_use')) {
+    return 'В комплекте есть оборудование в пользовании'
   }
   return null
 }
@@ -218,7 +219,7 @@ function logEntriesFor(unitId: number): UsageLogEntry[] {
 }
 
 /** Порядок статусов заявки от подачи до выдачи */
-const REQUEST_FLOW: RequestStatus[] = ['Новая', 'В обработке', 'Подготовка', 'Готово', 'На руках']
+const REQUEST_FLOW: RequestStatus[] = ['Новая', 'На модерации', 'Подготовка', 'Готово к выдаче', 'В пользовании']
 
 /** Следующий статус в очереди обработки заявки, если он есть */
 function nextRequestStatus(status: RequestStatus): RequestStatus | undefined {
@@ -236,30 +237,41 @@ function advanceRequestStatus(id: number): boolean {
   return true
 }
 
-/** Отклонить заявку на любом этапе до выдачи */
-function rejectRequest(id: number): boolean {
+/** Снять бронь: забронированные единицы без проблем снова доступны */
+function releaseUnits(units: EquipmentUnit[]) {
+  for (const unit of units) {
+    if (unit.status === 'booked') unit.status = 'available'
+  }
+}
+
+/** Отклонить заявку на любом этапе до выдачи; причина отказа обязательна */
+function rejectRequest(id: number, reason: string): boolean {
   const request = requestById(id)
   if (!request || !REQUEST_FLOW.slice(0, -1).includes(request.status)) return false
   request.status = 'Отклонена'
+  request.rejectReason = reason.trim()
+  // бронь снята — единицы снова свободны
+  releaseUnits(requestItems(request))
   return true
 }
 
 /**
  * Оформить выдачу: заявка уходит в активные аренды, выданные ТМЦ помечаются выданными, пишется журнал.
- * `issuedIds` — если выдают не всё: остальное освобождается, заявка становится «Частично выдана»,
- * причина пишется в комментарии к ТМЦ.
+ * `issuedIds` — если выдают не всё: остальное освобождается, причина пишется в комментарии к ТМЦ.
+ * Заявка в любом случае становится «В пользовании».
  */
 function issueRequest(id: number, issuedIds?: number[], reason?: string): boolean {
   const request = requestById(id)
-  if (!request || request.status !== 'Готово') return false
+  if (!request || request.status !== 'Готово к выдаче') return false
   const all = requestItems(request)
   const issued = issuedIds ? all.filter((u) => issuedIds.includes(u.id)) : all
   if (!issued.length) return false
   const notIssued = all.filter((u) => !issued.includes(u))
 
-  request.status = notIssued.length ? 'Частично выдана' : 'На руках'
+  request.status = 'В пользовании'
   request.pickupActualAt = nowRu()
   request.notIssuedIds = notIssued.map((u) => u.id)
+  releaseUnits(notIssued)
   if (notIssued.length) {
     const names = notIssued.map((u) => `${u.name} (${u.code})`).join(', ')
     const why = reason?.trim()
@@ -268,7 +280,7 @@ function issueRequest(id: number, issuedIds?: number[], reason?: string): boolea
 
   const nextLogId = state.log.reduce((max, e) => Math.max(max, e.id), 0) + 1
   issued.forEach((item, index) => {
-    item.status = 'issued'
+    item.status = 'in_use'
     const kit = kitForUnit(item.id)
     state.log.unshift({
       id: nextLogId + index,
@@ -303,25 +315,50 @@ function unitsOnHand(request: WarehouseRequest): EquipmentUnit[] {
 }
 
 /**
- * Принять возврат: только полный, все выданные единицы сверены или отмечены проблемой.
- * Единицы с проблемой остаются на обслуживании, остальные освобождаются.
+ * Принять возврат. `returnedIds` — что вернули (по умолчанию всё), `reason` — почему вернули не всё.
+ * Вернули всё — «Возвращено»; единицы с проблемой становятся повреждёнными, остальные свободны.
+ * Вернули часть — «Возвращено» с комментарием, остальные единицы утеряны.
+ * Не вернули ничего — «Невозвращено», все единицы утеряны.
  */
-function returnRequest(id: number): boolean {
+function returnRequest(id: number, returnedIds?: number[], reason?: string): boolean {
   const request = requestById(id)
   if (!request || !ON_HAND_STATUSES.includes(request.status)) return false
   const today = formatRuDate(new Date())
-  for (const item of unitsOnHand(request)) {
-    item.status = item.problem ? 'maintenance' : 'available'
+  const onHand = unitsOnHand(request)
+  const returned = returnedIds ? onHand.filter((u) => returnedIds.includes(u.id)) : onHand
+  const notReturned = onHand.filter((u) => !returned.includes(u))
+
+  for (const item of returned) {
+    item.status = item.problem ? (item.problem.type === 'lost' ? 'lost' : 'damaged') : 'available'
     const entry = openLogEntry(request, item.id)
     if (entry) entry.returnedAt = today
   }
-  request.status = 'Возвращена'
-  request.returnActualAt = nowRu()
+  for (const item of notReturned) {
+    item.status = 'lost'
+    item.problem = {
+      type: 'lost',
+      comment: reason?.trim() || undefined,
+      reportedAt: nowRu(),
+      reportedBy: CURRENT_USER_NAME,
+    }
+    const entry = openLogEntry(request, item.id)
+    if (entry) {
+      entry.returnedAt = today
+      entry.lost = true
+    }
+  }
+  if (notReturned.length) {
+    const names = notReturned.map((u) => `${u.name} (${u.code})`).join(', ')
+    const why = reason?.trim()
+    addComment(request.itemComments, `Не возвращено: ${names}.${why ? ` Причина: ${why}` : ''}`)
+  }
+
+  request.status = returned.length ? 'Возвращено' : 'Невозвращено'
+  request.returnActualAt = returned.length ? nowRu() : null
   return true
 }
-
 /**
- * Отметить проблему с единицей: она уходит на обслуживание до устранения.
+ * Отметить проблему с единицей: она становится «Повреждено» (или «Утеряно») до устранения.
  * С `requestId` проблема попадает и в комментарии к ТМЦ заявки.
  */
 function reportProblem(unitId: number, input: ProblemInput, requestId?: number): boolean {
@@ -335,24 +372,24 @@ function reportProblem(unitId: number, input: ProblemInput, requestId?: number):
     reportedAt: nowRu(),
     reportedBy: CURRENT_USER_NAME,
   }
-  unit.status = 'maintenance'
+  unit.status = input.type === 'lost' ? 'lost' : 'damaged'
   const request = requestId !== undefined ? requestById(requestId) : undefined
   if (request) {
     addComment(
       request.itemComments,
-      `Проблема «${problemTypeLabels[input.type]}»: ${unit.name} (${unit.code}).${comment ? ` ${comment}` : ''}`,
+      `Инцидент, проблема «${problemTypeLabels[input.type]}»: ${unit.name} (${unit.code}).${comment ? ` ${comment}` : ''}`,
     )
   }
   return true
 }
 
-/** Проблема устранена: единица возвращается в оборот (или остаётся выданной, если она на руках) */
+/** Проблема устранена: единица возвращается в оборот (или остаётся в пользовании, если она на руках) */
 function resolveProblem(unitId: number): boolean {
   const unit = unitById(unitId)
   if (!unit?.problem) return false
   unit.problem = undefined
   const onHand = state.log.some((e) => e.unitId === unitId && e.returnedAt === null)
-  unit.status = onHand ? 'issued' : 'available'
+  unit.status = onHand ? 'in_use' : 'available'
   return true
 }
 

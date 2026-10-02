@@ -2,7 +2,6 @@
 import { CloseOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons-vue'
 import { computed, ref, watch } from 'vue'
 import TmcEquipmentPicker from './TmcEquipmentPicker.vue'
-import { useIsMobile } from '@/composables/useIsMobile'
 import { useWarehouse } from '@/composables/useWarehouse'
 import type { EquipmentUnit, TmcGroup } from '@/mocks/tmc'
 
@@ -25,7 +24,6 @@ const props = defineProps<{
 const groups = defineModel<TmcGroup[]>('groups', { required: true })
 
 const { unitById } = useWarehouse()
-const isMobile = useIsMobile()
 
 /** Единицы, не занятые в группах этого комплекта, — их можно добавить */
 const freeUnits = computed(() => {
@@ -52,7 +50,8 @@ function unitsOf(group: TmcGroup): EquipmentUnit[] {
 
 function addGroup() {
   const id = groups.value.reduce((max, g) => Math.max(max, g.id), 0) + 1
-  groups.value = [...groups.value, { id, name: '', unitIds: [] }]
+  // новая группа — сверху списка, под кнопкой «Добавить группу»
+  groups.value = [{ id, name: '', unitIds: [] }, ...groups.value]
 }
 
 function removeGroup(group: TmcGroup) {
@@ -93,7 +92,7 @@ const copiesFreeUnits = computed(() => {
   <div class="kc">
     <!-- комплект: «Добавить группу» сверху, под выбором типа -->
     <div v-if="!copiesMode" class="kc__foot">
-      <a-button type="primary" :block="isMobile" @click="addGroup">
+      <a-button type="dashed" block @click="addGroup">
         <template #icon><PlusOutlined /></template>
         Добавить группу
       </a-button>
@@ -107,13 +106,20 @@ const copiesFreeUnits = computed(() => {
           placeholder="Название группы, например «HDMI-кабель»"
           class="kc__name"
         />
-        <a-button
-          type="text"
-          danger
-          aria-label="Удалить группу"
-          class="kc__remove"
-          @click="removeGroup(group)"
+        <!-- пустую группу удаляем сразу, а если в ней есть ТМЦ — после подтверждения -->
+        <a-popconfirm
+          v-if="group.unitIds.length"
+          placement="topRight"
+          title="Удалить группу?"
+          ok-text="Удалить"
+          cancel-text="Отмена"
+          @confirm="removeGroup(group)"
         >
+          <a-button type="text" danger aria-label="Удалить группу" class="kc__remove">
+            <template #icon><DeleteOutlined /></template>
+          </a-button>
+        </a-popconfirm>
+        <a-button v-else type="text" danger aria-label="Удалить группу" class="kc__remove" @click="removeGroup(group)">
           <template #icon><DeleteOutlined /></template>
         </a-button>
       </div>
@@ -125,8 +131,10 @@ const copiesFreeUnits = computed(() => {
 
       <ul v-if="group.unitIds.length" class="kc__units">
         <li v-for="unit in unitsOf(group)" :key="unit.id" class="kc__unit">
-          <span class="kc__unit-name">{{ unit.name }}</span>
-          <span class="kc__unit-code">{{ unit.code }}</span>
+          <div class="kc__unit-text">
+            <div class="kc__unit-name">{{ unit.name }}</div>
+            <div class="kc__unit-code">{{ unit.code }}</div>
+          </div>
           <a-button
             type="text"
             size="small"
@@ -206,21 +214,23 @@ const copiesFreeUnits = computed(() => {
   border-radius: 6px;
 }
 
-.kc__unit-name {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-  min-width: 120px;
-  font-weight: 600;
-  color: var(--tmc-text);
-}
-
-
-.kc__unit-code {
+/* название и код друг под другом: названия бывают длинными */
+.kc__unit-text {
   flex: 1;
   min-width: 0;
-  color: var(--tmc-text-tertiary);
+}
+
+.kc__unit-name {
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--tmc-text);
+  overflow-wrap: anywhere;
+}
+
+.kc__unit-code {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--tmc-text-tertiary, rgba(0, 0, 0, 0.45));
   word-break: break-all;
 }
 
@@ -270,15 +280,6 @@ const copiesFreeUnits = computed(() => {
 }
 
 @media (max-width: 767px) {
-  .kc__unit {
-    flex-wrap: wrap;
-    gap: 0 8px;
-  }
-
-  .kc__unit-name {
-    min-width: 0;
-  }
-
   .kc__add-unit {
     align-self: stretch;
   }

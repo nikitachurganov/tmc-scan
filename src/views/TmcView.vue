@@ -31,7 +31,7 @@ const { requestById, requestItems, unitsOnHand, issueRequest, returnRequest, rep
 
 const source = requestById(Number(props.id))
 // выдать можно только готовую заявку, принять возврат — только с ТМЦ на руках
-const ready = isReturn ? source !== undefined && unitsOnHand(source).length > 0 : source?.status === 'Готово'
+const ready = isReturn ? source !== undefined && unitsOnHand(source).length > 0 : source?.status === 'Готово к выдаче'
 const exitRoute = { name: isReturn ? 'requests' : 'warehouse' }
 if (!ready) router.replace(exitRoute)
 
@@ -62,14 +62,14 @@ function buildRequest(): IssueRequest {
 
 const request = reactive(buildRequest())
 
-/** Позиции с проблемой не сканируют: при выдаче они не выдаются, при возврате уходят на обслуживание */
+/** Позиции с проблемой не сканируют: при выдаче они не выдаются, при возврате возвращены, но повреждены (или утеряны) */
 const scannableItems = computed(() => request.items.filter((i) => !i.problem))
 const pendingItems = computed(() => scannableItems.value.filter((i) => !i.scanned))
 const scannedCount = computed(() => scannableItems.value.filter((i) => i.scanned).length)
 const problemCount = computed(() => request.items.length - scannableItems.value.length)
 const allDone = computed(() => request.items.length > 0 && pendingItems.value.length === 0)
-// выдать можно и часть (с подтверждением), вернуть — только всё
-const canSubmit = computed(() => (isReturn ? allDone.value : scannedCount.value > 0))
+// и выдать, и принять можно часть (с подтверждением и причиной); на возврате позиция с проблемой тоже возвращена
+const canSubmit = computed(() => (isReturn ? scannedCount.value + problemCount.value > 0 : scannedCount.value > 0))
 
 const sheetItemId = ref<number | null>(null)
 const scannerItemId = ref<number | null>(null)
@@ -142,35 +142,52 @@ function submitProblem(unitId: number, input: ProblemInput) {
     item.scanned = false
   }
   problemOpen.value = false
-  message.warning('Проблема отмечена, ТМЦ отправлено на обслуживание')
+  message.warning('Проблема отмечена, в заявку добавлена запись об инциденте')
 }
 
 const partialOpen = ref(false)
 const partialReason = ref('')
 const partialReasonError = ref(false)
-const notIssuedItems = computed(() => request.items.filter((i) => i.problem || !i.scanned))
-const issuedItems = computed(() => request.items.filter((i) => i.scanned && !i.problem))
+// выдача: не выдают позиции с проблемой и неотсканированные; возврат: не вернули только неотсканированные
+const notIssuedItems = computed(() =>
+  isReturn ? pendingItems.value : request.items.filter((i) => i.problem || !i.scanned),
+)
+const issuedItems = computed(() =>
+  isReturn ? request.items.filter((i) => i.scanned || i.problem) : request.items.filter((i) => i.scanned && !i.problem),
+)
 
-/** «Из 3 позиций будет выдано только 1: «Ноутбук»» */
+/** «Из 3 позиций будет выдано (возвращено) только 1: «Ноутбук»» */
 const partialSummary = computed(() => {
   const total = request.items.length
   const noun = total % 10 === 1 && total % 100 !== 11 ? 'позиции' : 'позиций'
   const names = issuedItems.value.map((i) => `«${i.name}»`).join(', ')
-  return `Из ${total} ${noun} будет выдано только ${issuedItems.value.length}: ${names}.`
+  return `Из ${total} ${noun} будет ${isReturn ? 'возвращено' : 'выдано'} только ${issuedItems.value.length}: ${names}.`
 })
+
+/** Пользователь ничего не вернул: все позиции утеряны, заявка «Невозвращено» */
+const notReturnedOpen = ref(false)
+const notReturnedReason = ref('')
+
+function confirmNotReturned() {
+  if (!source || !returnRequest(source.id, [], notReturnedReason.value)) return
+  notReturnedOpen.value = false
+  message.warning('Заявка закрыта как невозвращённая, ТМЦ отмечены утерянными')
+  router.push(exitRoute)
+}
+
 function close() {
   router.push(exitRoute)
 }
 
 function submit() {
   if (!source || !canSubmit.value) return
-  if (isReturn) {
+  if (isReturn && pendingItems.value.length === 0) {
     if (!returnRequest(source.id)) return
     message.success('Возврат принят')
     router.push(exitRoute)
     return
   }
-  if (scannedCount.value < request.items.length) {
+  if (isReturn || scannedCount.value < request.items.length) {
     partialReason.value = ''
     partialReasonError.value = false
     partialOpen.value = true
@@ -181,12 +198,23 @@ function submit() {
   router.push(exitRoute)
 }
 
-/** Неполная выдача: причина обязательна, если что-то просто не отсканировали (у проблемных она уже есть) */
+/**
+ * Неполная выдача или возврат: причина обязательна, если что-то просто не отсканировали
+ * (у проблемных при выдаче она уже есть).
+ */
 function confirmPartial() {
   if (!source) return
   const reason = partialReason.value.trim()
   if (pendingItems.value.length > 0 && !reason) {
     partialReasonError.value = true
+    return
+  }
+  if (isReturn) {
+    const returnedIds = issuedItems.value.map((i) => i.id)
+    if (!returnRequest(source.id, returnedIds, reason)) return
+    partialOpen.value = false
+    message.success('Принят неполный возврат, остальные ТМЦ отмечены утерянными')
+    router.push(exitRoute)
     return
   }
   const problems = request.items.filter((i) => i.problem).map((i) => `${i.name} — ${i.problem}`)
@@ -288,6 +316,9 @@ function confirmPartial() {
             <a-button @click="close">Отмена</a-button>
             <div class="td-footer__main">
               <a-button @click="openProblem(null)">Проблема с ТМЦ</a-button>
+              <a-button v-if="isReturn" danger :disabled="canSubmit" @click="notReturnedOpen = true">
+                Ничего не вернули
+              </a-button>
               <a-button type="primary" :disabled="!canSubmit" @click="submit">
                 {{ isReturn ? 'Принять возврат' : 'Выдать' }}
               </a-button>
@@ -343,6 +374,9 @@ function confirmPartial() {
 
       <footer class="tmc-footer">
         <a-button size="large" block @click="openProblem(null)">Проблема с ТМЦ</a-button>
+        <a-button v-if="isReturn" size="large" block danger :disabled="canSubmit" @click="notReturnedOpen = true">
+          Ничего не вернули
+        </a-button>
         <a-button size="large" block type="primary" :disabled="!canSubmit" @click="submit">
           {{ isReturn ? 'Принять возврат' : 'Выдать' }}
         </a-button>
@@ -383,14 +417,15 @@ function confirmPartial() {
 
     <a-modal
       v-model:open="partialOpen"
-      title="Выдать неполный комплект?"
+      :title="isReturn ? 'Принять неполный возврат?' : 'Выдать неполный комплект?'"
       centered
-      ok-text="Выдать неполный комплект"
+      :ok-text="isReturn ? 'Принять неполный возврат' : 'Выдать неполный комплект'"
       cancel-text="Отмена"
       @ok="confirmPartial"
     >
       <p class="tmc-partial__text">
-        {{ partialSummary }} Остальные ТМЦ по этой заявке выдаваться не будут.
+        {{ partialSummary }}
+        {{ isReturn ? 'Остальные ТМЦ будут отмечены как утерянные.' : 'Остальные ТМЦ по этой заявке выдаваться не будут.' }}
       </p>
       <ul class="tmc-partial__list">
         <li v-for="item in notIssuedItems" :key="item.id" class="tmc-partial__item">
@@ -404,7 +439,7 @@ function confirmPartial() {
       </ul>
       <a-form layout="vertical">
         <a-form-item
-          label="Почему выдаётся не всё"
+          :label="isReturn ? 'Почему возвращено не всё' : 'Почему выдаётся не всё'"
           :required="pendingItems.length > 0"
           :validate-status="partialReasonError ? 'error' : undefined"
           :help="partialReasonError ? 'Укажите причину' : undefined"
@@ -414,8 +449,32 @@ function confirmPartial() {
             v-model:value="partialReason"
             :rows="3"
             :maxlength="500"
-            placeholder="Например, нет на складе, пользователь отказался"
+            :placeholder="isReturn ? 'Например, пользователь потерял, обещал вернуть позже' : 'Например, нет на складе, пользователь отказался'"
             @change="partialReasonError = false"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal
+      v-model:open="notReturnedOpen"
+      title="Ничего не вернули?"
+      centered
+      ok-text="Закрыть как невозвращённую"
+      ok-type="danger"
+      cancel-text="Отмена"
+      @ok="confirmNotReturned"
+    >
+      <p class="tmc-partial__text">
+        Заявка получит статус «Невозвращено», все ТМЦ по ней будут отмечены как утерянные.
+      </p>
+      <a-form layout="vertical">
+        <a-form-item label="Комментарий" class="tmc-partial__reason">
+          <a-textarea
+            v-model:value="notReturnedReason"
+            :rows="3"
+            :maxlength="500"
+            placeholder="Например, пользователь не пришёл и не отвечает"
           />
         </a-form-item>
       </a-form>

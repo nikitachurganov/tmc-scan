@@ -97,13 +97,13 @@ const rules: Record<string, Rule[]> = {
   pickupRoom: [{ required: true, message: 'Выберите кабинет', trigger: 'change' }],
 }
 
-/** Старший админ закреплён за одним складом: занятые другими складами — недоступны */
+/** Старший администратор закреплён за одним складом: занятые другими складами — недоступны */
 const seniorAdminOptions = computed(() =>
   employees.map((e) => {
     const elsewhere = warehouses.value.find((w) => w.id !== form.id && w.seniorAdminIds.includes(e.id))
     return {
       value: e.id,
-      label: elsewhere ? `${e.name} — старший админ: ${elsewhere.name}` : e.name,
+      label: elsewhere ? `${e.name} — старший администратор: ${elsewhere.name}` : e.name,
       disabled: elsewhere !== undefined,
     }
   }),
@@ -169,8 +169,8 @@ async function submit() {
         <a-descriptions-item label="Номер телефона">{{ current.phone || '—' }}</a-descriptions-item>
         <a-descriptions-item label="Почта">{{ current.email || '—' }}</a-descriptions-item>
         <a-descriptions-item label="Управляющие">{{ namesLabel(current.managerIds) }}</a-descriptions-item>
-        <a-descriptions-item label="Старшие админы">{{ namesLabel(current.seniorAdminIds) }}</a-descriptions-item>
-        <a-descriptions-item label="Модераторы">{{ namesLabel(current.moderatorIds) }}</a-descriptions-item>
+        <a-descriptions-item label="Старшие администраторы">{{ namesLabel(current.seniorAdminIds) }}</a-descriptions-item>
+        <a-descriptions-item label="Администраторы">{{ namesLabel(current.moderatorIds) }}</a-descriptions-item>
       </a-descriptions>
 
       <a-form v-else ref="formRef" layout="vertical" :model="form" :rules="rules">
@@ -220,7 +220,7 @@ async function submit() {
               :options="employeeOptions"
             />
           </a-form-item>
-          <a-form-item label="Старшие админы" name="seniorAdminIds" class="ws-row__item">
+          <a-form-item label="Старшие администраторы" name="seniorAdminIds" class="ws-row__item">
             <a-select
               v-model:value="form.seniorAdminIds"
               mode="multiple"
@@ -230,7 +230,7 @@ async function submit() {
               :options="seniorAdminOptions"
             />
           </a-form-item>
-          <a-form-item label="Модераторы" name="moderatorIds" class="ws-row__item">
+          <a-form-item label="Администраторы" name="moderatorIds" class="ws-row__item">
             <a-select
               v-model:value="form.moderatorIds"
               mode="multiple"

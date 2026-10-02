@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { ExclamationCircleOutlined } from '@ant-design/icons-vue'
 import { computed } from 'vue'
-import { parseRuDate } from '@/utils/date'
-import { formatDuration } from '@/utils/duration'
 import { requestDates } from '@/utils/requestDates'
 import type { WarehouseRequest } from '@/mocks/tmc'
 
@@ -20,14 +18,6 @@ const props = defineProps<{
 }>()
 
 const dates = computed(() => requestDates(props.request))
-
-/** Плановая длительность пользования: от плана начала до срока возврата */
-const plannedDuration = computed(() => {
-  const start = parseRuDate(dates.value.plannedStart.text)
-  const end = parseRuDate(dates.value.plannedEnd.text)
-  if (!start || !end || end <= start) return null
-  return formatDuration(Math.round((end.getTime() - start.getTime()) / 60000))
-})
 
 const done = computed(() => props.scanned + props.problems)
 const percent = computed(() => (props.total ? Math.round((done.value / props.total) * 100) : 0))
@@ -82,7 +72,6 @@ const percent = computed(() => (props.total ? Math.round((done.value / props.tot
         <span>{{ dates.plannedEnd.text }}</span>
         <span :class="{ 'is__late': dates.actualEnd.late }">{{ dates.actualEnd.text }}</span>
       </div>
-      <div v-if="plannedDuration" class="is__duration">Срок пользования: {{ plannedDuration }}</div>
     </section>
 
     <section class="is__section">
@@ -228,12 +217,6 @@ const percent = computed(() => (props.total ? Math.round((done.value / props.tot
 .is__late {
   font-weight: 600;
   color: #ff4d4f;
-}
-
-.is__duration {
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--tmc-text-secondary);
 }
 
 .is__text {

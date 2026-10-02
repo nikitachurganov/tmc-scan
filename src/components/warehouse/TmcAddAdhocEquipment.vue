@@ -12,8 +12,6 @@ import type { EquipmentUnit } from '@/mocks/tmc'
 const props = defineProps<{
   open: boolean
   categories: string[]
-  /** Можно сразу завести несколько одинаковых экземпляров (несколько экземпляров, комплект) */
-  allowQuantity?: boolean
   /** Подставить категорию ТМЦ — для нескольких экземпляров она общая */
   defaultCategory?: string
 }>()
@@ -23,7 +21,7 @@ const emit = defineEmits<{ close: []; created: [units: EquipmentUnit[]] }>()
 const { addAdhocUnits } = useWarehouse()
 
 const formRef = ref<FormInstance>()
-const form = reactive({ name: '', category: '', quantity: 1 })
+const form = reactive({ name: '', category: '' })
 
 const rules: Record<string, Rule[]> = {
   name: [{ required: true, whitespace: true, message: 'Укажите наименование', trigger: 'blur' }],
@@ -36,7 +34,6 @@ watch(
     if (!open) return
     form.name = ''
     form.category = props.defaultCategory ?? ''
-    form.quantity = 1
     formRef.value?.clearValidate()
   },
 )
@@ -47,10 +44,7 @@ async function submit() {
   } catch {
     return
   }
-  const units = addAdhocUnits(
-    { name: form.name, category: form.category },
-    props.allowQuantity ? form.quantity : 1,
-  )
+  const units = addAdhocUnits({ name: form.name, category: form.category })
   emit('created', units)
 }
 </script>
@@ -60,6 +54,7 @@ async function submit() {
     :open="open"
     title="Ручное добавление"
     :width="440"
+    centered
     destroy-on-close
     @cancel="emit('close')"
   >
@@ -74,9 +69,6 @@ async function submit() {
           :options="categories.map((value) => ({ value }))"
           placeholder="Выберите или введите новую"
         />
-      </a-form-item>
-      <a-form-item v-if="allowQuantity" label="Количество экземпляров" name="quantity">
-        <a-input-number v-model:value="form.quantity" size="large" :min="1" :max="50" :precision="0" />
       </a-form-item>
     </a-form>
     <template #footer>
